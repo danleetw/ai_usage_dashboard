@@ -1,0 +1,53 @@
+name: cross-platform smoke test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  smoke-test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: node --check server.js
+        run: node --check server.js
+
+      - name: Start server and smoke-test /api/usage
+        shell: bash
+        run: |
+          node server.js &
+          SERVER_PID=$!
+          sleep 2
+          curl -sf http://127.0.0.1:3789/api/usage -o response.json
+          cat response.json
+          kill $SERVER_PID
+
+      # 沒有真實憑證,四個提供商預期都回報 ok:false(找不到憑證),這是正常結果;
+      # 這一步真正要驗證的是本機硬體識別碼加解密(machineKey)在各平台都能正常運作,
+      # 不會拋出例外或解密失敗 —— 這正是 Windows/macOS/Linux 三種取得硬體識別碼
+      # 邏輯彼此不同、最需要跨平台驗證的地方。
+      - name: Smoke-test encrypted-secret round trip (validates hardware-id key derivation)
+        shell: bash
+        run: |
+          node server.js &
+          SERVER_PID=$!
+          sleep 2
+          curl -sf -X POST http://127.0.0.1:3789/api/minimax/key \
+            -H "Content-Type: application/json" \
+            -d '{"apiKey":"ci-smoke-test-key"}' -o save.json
+          cat save.json
+          grep -q '"ok":true' save.json
+          curl -sf http://127.0.0.1:3789/api/usage -o response2.json
+          cat response2.json
+          if grep -q '解密失敗' response2.json; then
+            echo "硬體識別碼加解密在此平台失敗" >&2
+            exit 1
+          fi
+          kill $SERVER_PID

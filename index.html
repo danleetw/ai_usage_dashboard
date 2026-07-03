@@ -1,0 +1,977 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="pageTitle">AI 使用量儀表板</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1220'/%3E%3Crect x='5' y='17' width='5' height='10' rx='1.5' fill='%2322c55e'/%3E%3Crect x='13.5' y='11' width='5' height='16' rx='1.5' fill='%23fbbf24'/%3E%3Crect x='22' y='6' width='5' height='21' rx='1.5' fill='%2338bdf8'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0b1220;
+    --panel: #121b30;
+    --panel-edge: #24334f;
+    --text: #dbe6f7;
+    --muted: #7e91b3;
+    --sky: #38bdf8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #16233f 0%, var(--bg) 60%);
+    color: var(--text);
+    font-family: "Segoe UI", "Microsoft JhengHei", system-ui, sans-serif;
+    min-height: 100vh;
+    padding: 20px clamp(10px, 3vw, 40px);
+  }
+
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 12px;
+    margin-bottom: 18px;
+  }
+  h1 { font-size: 20px; letter-spacing: 3px; font-weight: 700; }
+  h1 .pix { color: var(--sky); }
+  #status {
+    font-size: 12px; color: var(--muted);
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 10px; border: 1px solid var(--panel-edge); border-radius: 999px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #64748b; flex: none; }
+  .dot.ok  { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+  .dot.err { background: #ef4444; box-shadow: 0 0 6px #ef4444; }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; color: var(--text); cursor: pointer;
+    background: #1a2740; border: 1px solid var(--panel-edge); border-radius: 8px;
+    padding: 6px 14px;
+  }
+  button:hover { border-color: var(--sky); }
+  button.primary { background: #0c4a6e; border-color: #0284c7; }
+  button.danger  { background: #450a0a; border-color: #b91c1c; }
+  #langToggle { font-size: 12px; padding: 6px 12px; }
+
+  /* ---------- 提供商橫列 ---------- */
+  #rows { display: flex; flex-direction: column; gap: 14px; }
+  .row {
+    display: grid; grid-template-columns: 170px 1fr; gap: 14px; align-items: center;
+    background: linear-gradient(180deg, #16223c, var(--panel));
+    border: 1px solid var(--panel-edge); border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 4px 18px rgba(0,0,0,.35);
+  }
+  .prov { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .prov-name {
+    font-size: 18px; font-weight: 700; letter-spacing: 1px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .drag-handle {
+    cursor: grab; color: var(--muted); font-size: 15px;
+    user-select: none; flex: none;
+  }
+  .drag-handle:active { cursor: grabbing; }
+  .row.dragging { opacity: .45; }
+  .row.drag-over-top    { box-shadow: 0 -3px 0 var(--sky), 0 4px 18px rgba(0,0,0,.35); }
+  .row.drag-over-bottom { box-shadow: 0  3px 0 var(--sky), 0 4px 18px rgba(0,0,0,.35); }
+
+  /* 觸控/窄螢幕:拖拉不可用,改用上下移動鍵 */
+  .move-btns { display: none; gap: 6px; }
+  .move-btns button { padding: 3px 12px; font-size: 13px; line-height: 1; }
+  .move-btns button:disabled { opacity: .25; cursor: default; }
+  @media (max-width: 720px), (pointer: coarse) {
+    .move-btns { display: flex; }
+    .drag-handle { display: none; }
+  }
+  .prov-meta { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .prov-err { font-size: 11px; color: #fca5a5; line-height: 1.3; }
+  .edit-btn { align-self: flex-start; font-size: 12px; padding: 3px 10px; }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px;
+  }
+  .metric { min-width: 0; }
+  .metric-label {
+    font-size: 11px; color: var(--muted); letter-spacing: 1px;
+    margin-bottom: 5px; display: flex; justify-content: space-between; gap: 4px;
+    white-space: nowrap; overflow: hidden;
+  }
+  .src { color: #475a7d; font-size: 10px; }
+  .sub { font-size: 11px; color: var(--muted); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ---------- 血條 ---------- */
+  .bar {
+    position: relative; height: 24px; border-radius: 7px;
+    background: #080d1a; border: 1px solid #2b3b5e;
+    overflow: hidden;
+  }
+  .fill {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    border-radius: 6px 0 0 6px;
+    transition: width .6s ease;
+  }
+  .fill::after { /* 頂部高光,電玩血條質感 */
+    content: ""; position: absolute; left: 0; right: 0; top: 0; height: 45%;
+    background: linear-gradient(180deg, rgba(255,255,255,.42), rgba(255,255,255,0));
+    border-radius: 6px 6px 0 0;
+  }
+  .ticks { /* 血條分格線 */
+    position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(90deg,
+      transparent 0, transparent calc(10% - 1px),
+      rgba(0,0,0,.45) calc(10% - 1px), rgba(0,0,0,.45) 10%);
+  }
+  .bar-text {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; letter-spacing: 1px;
+    color: #fff; text-shadow: 0 1px 3px rgba(0,0,0,.9);
+    pointer-events: none;
+  }
+  /* 無法讀取:灰色虛線框,避免誤導 */
+  .bar.na { border-style: dashed; border-color: #3d4a66; background: #0d1424; }
+  .na-text { color: #64748b !important; text-shadow: none !important; font-weight: 600; }
+  .bar.mini { height: 10px; flex: 1; min-width: 60px; border-radius: 4px; }
+  .ctx-line { display: flex; align-items: center; gap: 6px; margin-top: 5px; font-size: 11px; color: var(--muted); }
+  .ctx-name { max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: none; }
+  .ctx-pct { flex: none; }
+  details.ctx-more { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  details.ctx-more summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  .fill.g { background: linear-gradient(180deg, #4ade80, #15803d); }
+  .fill.y { background: linear-gradient(180deg, #fde047, #a16207); }
+  .fill.r { background: linear-gradient(180deg, #f87171, #b91c1c); animation: lowhp 1s infinite; }
+  @keyframes lowhp { 50% { filter: brightness(1.45); } }
+
+  /* ---------- 重生倒數條(淡藍框,天空藍隨時間填滿) ---------- */
+  .bar.cd { border-color: rgba(125,211,252,.4); background: rgba(12,26,46,.9); }
+  .bar.cd .fill { background: linear-gradient(180deg, #7dd3fc, #0369a1); }
+  .bar.cd.ready { border-color: var(--sky); box-shadow: 0 0 10px rgba(56,189,248,.55); }
+  .bar.cd.ready .fill { animation: readyPulse 1.2s infinite; }
+  @keyframes readyPulse { 50% { filter: brightness(1.5); } }
+
+  /* 重生倒數 < 30 分鐘:外框開始發亮蓄力,越接近重生脈動越快(電玩「準備爆發」感) */
+  .bar.cd.soon {
+    animation: chargeGlow var(--charge-speed, 1.4s) ease-in-out infinite;
+  }
+  @keyframes chargeGlow {
+    0%, 100% {
+      border-color: rgba(125,211,252,.55);
+      box-shadow: 0 0 4px rgba(56,189,248,.35), inset 0 0 4px rgba(56,189,248,.15);
+      transform: scale(1);
+    }
+    50% {
+      border-color: #7dd3fc;
+      box-shadow: 0 0 14px rgba(56,189,248,.9), 0 0 26px rgba(56,189,248,.5), inset 0 0 8px rgba(56,189,248,.35);
+      transform: scale(1.015);
+    }
+  }
+
+  .empty-note { color: var(--muted); text-align: center; padding: 40px 0; font-size: 14px; }
+
+  /* ---------- RWD ---------- */
+  @media (max-width: 1100px) {
+    .metrics { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  }
+  @media (max-width: 720px) {
+    .row { grid-template-columns: 1fr; }
+    .prov { flex-direction: row; align-items: center; flex-wrap: wrap; }
+    .edit-btn { margin-left: auto; }
+  }
+
+  /* ---------- 編輯視窗 ---------- */
+  dialog {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--panel-edge); border-radius: 14px;
+    padding: 22px; width: min(480px, 92vw);
+  }
+  dialog::backdrop { background: rgba(3,7,18,.7); }
+  dialog h2 { font-size: 16px; margin-bottom: 4px; letter-spacing: 2px; }
+  dialog .hint { font-size: 11px; color: var(--muted); margin-bottom: 14px; line-height: 1.5; }
+  fieldset {
+    border: 1px solid var(--panel-edge); border-radius: 10px;
+    padding: 10px 12px 12px; margin-bottom: 12px;
+  }
+  legend { font-size: 12px; color: var(--sky); padding: 0 6px; letter-spacing: 1px; }
+  .frow { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .frow label { font-size: 12px; color: var(--muted); min-width: 86px; }
+  input, select {
+    font: inherit; font-size: 13px; color: var(--text);
+    background: #0b1526; border: 1px solid var(--panel-edge); border-radius: 6px;
+    padding: 5px 8px; flex: 1; min-width: 0;
+  }
+  input[type="number"] { max-width: 90px; flex: none; }
+  .dlg-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 6px; }
+
+  /* ---------- Toast 通知 ---------- */
+  #toast {
+    position: fixed; right: 20px; bottom: 20px; z-index: 50;
+    max-width: min(420px, 90vw);
+    background: #16223c; border: 1px solid var(--sky); border-radius: 10px;
+    padding: 12px 16px; font-size: 13px; line-height: 1.5;
+    box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    opacity: 0; transform: translateY(8px); pointer-events: none;
+    transition: opacity .3s, transform .3s;
+  }
+  #toast.show { opacity: 1; transform: none; }
+  #toast.err { border-color: #ef4444; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>
+  <span id="status"><span class="dot" id="statusDot"></span><span id="statusText" data-i18n="statusConnecting">連線中…</span></span>
+  <span class="spacer"></span>
+  <button id="langToggle" type="button"></button>
+  <button id="addBtn" class="primary" data-i18n="addProviderBtn">＋ 新增提供商</button>
+</header>
+
+<main id="rows"></main>
+
+<div id="toast"></div>
+
+<dialog id="addDlg">
+  <h2 data-i18n="addDlgTitle">新增提供商</h2>
+  <p class="hint" data-i18n="addDlgHint">僅列出目前支援自動同步、且尚未在儀表板上的提供商。</p>
+  <div id="addList" style="display:flex; flex-direction:column; gap:8px; margin-bottom:14px"></div>
+  <div class="dlg-actions"><button type="button" id="addCancel" data-i18n="cancelBtn">取消</button></div>
+</dialog>
+
+<dialog id="dlg">
+  <h2 id="dlgTitle" data-i18n="editDlgTitle">編輯提供商</h2>
+  <p class="hint" id="dlgHint"></p>
+  <form method="dialog" id="dlgForm">
+    <fieldset>
+      <legend data-i18n="legendBasic">基本</legend>
+      <div class="frow"><label data-i18n="labelName">名稱</label><input id="fName" required maxlength="30"></div>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="legendSession">目前使用率(Session)</legend>
+      <div class="frow"><label data-i18n="labelUsedPct">已用 %</label><input id="fSessPct" type="number" min="0" max="100" step="0.1"></div>
+      <div class="frow"><label data-i18n="labelResetTime">重置時間</label><input id="fSessReset" type="datetime-local"></div>
+      <div class="frow"><label data-i18n="labelWindowMin">週期(分鐘)</label><input id="fSessWin" type="number" min="1" value="300"></div>
+    </fieldset>
+    <fieldset id="fKeyFs" style="display:none">
+      <legend data-i18n="legendMinimaxKey">MiniMax API Key(AES 加密儲存於本機)</legend>
+      <div class="frow"><label data-i18n="labelApiKey">API Key</label>
+        <input id="fApiKey" type="password" autocomplete="off"></div>
+      <div class="frow">
+        <button type="button" id="clearKeyBtn" data-i18n="clearKeyBtn">清除已儲存的 Key</button>
+      </div>
+      <p class="hint" style="margin:8px 0 0" data-i18n="minimaxKeyHint">Key 只送往本機伺服器(127.0.0.1),以硬體綁定金鑰 AES-256-GCM 加密後存入 config.json,不會以明文落地。留空 = 不變更。</p>
+    </fieldset>
+    <fieldset>
+      <legend data-i18n="legendLongterm">長期使用率(每週/每月)</legend>
+      <div class="frow"><label data-i18n="labelDisplayAs">顯示為</label>
+        <select id="fLtLabel"><option value="每週" data-i18n="ltWeekly">每週</option><option value="每月" data-i18n="ltMonthly">每月</option></select></div>
+      <div class="frow"><label data-i18n="labelUsedPct">已用 %</label><input id="fLtPct" type="number" min="0" max="100" step="0.1"></div>
+      <div class="frow"><label data-i18n="labelResetTime">重置時間</label><input id="fLtReset" type="datetime-local"></div>
+      <div class="frow"><label data-i18n="labelWindowMin">週期(分鐘)</label><input id="fLtWin" type="number" min="1" value="10080"></div>
+    </fieldset>
+    <div class="dlg-actions">
+      <button type="button" class="danger" id="delBtn" data-i18n="deleteBtn">刪除</button>
+      <span class="spacer" style="flex:1"></span>
+      <button type="button" id="cancelBtn" data-i18n="cancelBtn">取消</button>
+      <button type="submit" class="primary" id="saveBtn" data-i18n="saveBtn">儲存</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+'use strict';
+const LS_KEY = 'aiDash.v1';
+const $ = s => document.querySelector(s);
+
+// ---------------- 語言(i18n) ----------------
+const LANG_KEY = 'aiDash.lang.v1';
+const I18N = {
+  'zh-Hant': {
+    pageTitle: 'AI 使用量儀表板',
+    statusConnecting: '連線中…',
+    addProviderBtn: '＋ 新增提供商',
+    addDlgTitle: '新增提供商',
+    addDlgHint: '僅列出目前支援自動同步、且尚未在儀表板上的提供商。',
+    cancelBtn: '取消',
+    editDlgTitle: '編輯提供商',
+    legendBasic: '基本',
+    labelName: '名稱',
+    legendSession: '目前使用率(Session)',
+    labelUsedPct: '已用 %',
+    labelResetTime: '重置時間',
+    labelWindowMin: '週期(分鐘)',
+    legendMinimaxKey: 'MiniMax API Key(AES 加密儲存於本機)',
+    labelApiKey: 'API Key',
+    clearKeyBtn: '清除已儲存的 Key',
+    minimaxKeyHint: 'Key 只送往本機伺服器(127.0.0.1),以硬體綁定金鑰 AES-256-GCM 加密後存入 config.json,不會以明文落地。留空 = 不變更。',
+    legendLongterm: '長期使用率(每週/每月)',
+    labelDisplayAs: '顯示為',
+    ltWeekly: '每週',
+    ltMonthly: '每月',
+    deleteBtn: '刪除',
+    saveBtn: '儲存',
+    srcManual: '手動',
+    srcAuto: '自動',
+    emptyNote: '尚無提供商,點右上「＋ 新增提供商」開始。',
+    modeAuto: '自動同步',
+    modeAutoErr: '自動失敗,退回手動',
+    modeWait: '等待伺服器…',
+    modeManual: '手動模式',
+    dragTitle: '拖拉排序',
+    editBtnLabel: '✎ 編輯',
+    moveUpTitle: '上移',
+    moveDownTitle: '下移',
+    labelCurrentUsage: '目前使用率',
+    labelNextRespawn: '下次重生',
+    labelContextUsage: 'CONTEXT 使用率',
+    usageOfLabel: '{label}使用率',
+    respawnOfLabel: '{label}重生',
+    naText: '無法讀取',
+    naSub: '無活躍 session 或不支援',
+    activeSessionsCount: '{label} · 共 {n} 個活躍 session',
+    activeSessionUsed: '{label} · 已用 {pct}%',
+    readyText: '✦ 已重生 ✦',
+    remainPct: '剩 {pct}%',
+    usedPct: '已用 {pct}%',
+    editHintPlaceholder: '點「✎ 編輯」輸入資料',
+    resetAtTime: '重置於 {time}',
+    noResetTime: '未設定重置時間',
+    serverConnected: '伺服器已連線 · 更新於 {time}',
+    offlineMode: '離線模式(未偵測到本機伺服器,顯示手動資料)',
+    saveFailed: '儲存失敗:{err}',
+    keyCleared: '已清除儲存的 MiniMax API Key',
+    keySavedSuccess: '✓ Key 已加密儲存,MiniMax 自動同步成功!',
+    keySavedTestFailed: 'Key 已加密儲存,但端點測試失敗:{err}',
+    unknownError: '未知錯誤',
+    offlineCantSave: '無法連線本機伺服器 — 離線模式下無法儲存 Key,請先執行 start.bat',
+    dlgHintAuto: '此提供商正在自動同步:Session 與長期使用率由伺服器覆蓋,手動值僅作為備援;Context 永遠採用手動值。',
+    dlgHintManual: '所有欄位皆為手動值,存於瀏覽器 localStorage。',
+    keyPlaceholderSet: '已設定(留空 = 不變更)',
+    keyPlaceholderEmpty: '貼上你的 MiniMax API Key',
+    unnamedDefault: '未命名',
+    confirmClearKey: '確定清除已儲存的 MiniMax API Key?',
+    confirmDelete: '確定刪除「{name}」?',
+    allProvidersAdded: '目前支援的提供商({list})都已在儀表板上',
+    manualSuffix: '(手動)',
+    providerAdded: '已加入 {name}',
+    langToggleLabel: '中文',
+    langToggleTitle: 'Switch to English',
+  },
+  en: {
+    pageTitle: 'AI Usage Dashboard',
+    statusConnecting: 'Connecting…',
+    addProviderBtn: '＋ Add Provider',
+    addDlgTitle: 'Add Provider',
+    addDlgHint: 'Only providers that support auto sync and are not yet on the dashboard are listed.',
+    cancelBtn: 'Cancel',
+    editDlgTitle: 'Edit Provider',
+    legendBasic: 'Basic',
+    labelName: 'Name',
+    legendSession: 'Current Usage (Session)',
+    labelUsedPct: 'Used %',
+    labelResetTime: 'Reset Time',
+    labelWindowMin: 'Window (min)',
+    legendMinimaxKey: 'MiniMax API Key (AES encrypted, stored locally)',
+    labelApiKey: 'API Key',
+    clearKeyBtn: 'Clear saved Key',
+    minimaxKeyHint: 'The key is only sent to the local server (127.0.0.1), encrypted with a hardware-bound AES-256-GCM key and stored in config.json — never written in plaintext. Leave blank to keep unchanged.',
+    legendLongterm: 'Long-term Usage (Weekly/Monthly)',
+    labelDisplayAs: 'Display as',
+    ltWeekly: 'Weekly',
+    ltMonthly: 'Monthly',
+    deleteBtn: 'Delete',
+    saveBtn: 'Save',
+    srcManual: 'Manual',
+    srcAuto: 'Auto',
+    emptyNote: 'No providers yet. Click "+ Add Provider" at the top right to start.',
+    modeAuto: 'Auto sync',
+    modeAutoErr: 'Auto sync failed, fell back to manual',
+    modeWait: 'Waiting for server…',
+    modeManual: 'Manual mode',
+    dragTitle: 'Drag to reorder',
+    editBtnLabel: '✎ Edit',
+    moveUpTitle: 'Move up',
+    moveDownTitle: 'Move down',
+    labelCurrentUsage: 'Current Usage',
+    labelNextRespawn: 'Next Respawn',
+    labelContextUsage: 'CONTEXT Usage',
+    usageOfLabel: '{label} Usage',
+    respawnOfLabel: '{label} Respawn',
+    naText: 'N/A',
+    naSub: 'No active session or unsupported',
+    activeSessionsCount: '{label} · {n} active sessions',
+    activeSessionUsed: '{label} · {pct}% used',
+    readyText: '✦ Ready ✦',
+    remainPct: '{pct}% left',
+    usedPct: '{pct}% used',
+    editHintPlaceholder: 'Click "✎ Edit" to enter data',
+    resetAtTime: 'Resets at {time}',
+    noResetTime: 'No reset time set',
+    serverConnected: 'Server connected · updated {time}',
+    offlineMode: 'Offline mode (local server not detected, showing manual data)',
+    saveFailed: 'Save failed: {err}',
+    keyCleared: 'Cleared saved MiniMax API Key',
+    keySavedSuccess: '✓ Key encrypted and saved — MiniMax auto sync succeeded!',
+    keySavedTestFailed: 'Key encrypted and saved, but endpoint test failed: {err}',
+    unknownError: 'Unknown error',
+    offlineCantSave: 'Cannot reach the local server — cannot save the key in offline mode. Please run start.bat first.',
+    dlgHintAuto: 'This provider is auto-syncing: session and long-term usage are overridden by the server (manual values act as a fallback); Context always uses the manual value.',
+    dlgHintManual: 'All fields are manual values stored in the browser\'s localStorage.',
+    keyPlaceholderSet: 'Set (leave blank = no change)',
+    keyPlaceholderEmpty: 'Paste your MiniMax API Key',
+    unnamedDefault: 'Unnamed',
+    confirmClearKey: 'Are you sure you want to clear the saved MiniMax API Key?',
+    confirmDelete: 'Delete "{name}"?',
+    allProvidersAdded: 'All supported providers ({list}) are already on the dashboard',
+    manualSuffix: ' (Manual)',
+    providerAdded: 'Added {name}',
+    langToggleLabel: 'EN',
+    langToggleTitle: '切換為繁體中文',
+  },
+};
+const WEEKDAYS_I18N = {
+  'zh-Hant': ['日', '一', '二', '三', '四', '五', '六'],
+  en: ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'],
+};
+function detectLang() {
+  const nav = (navigator.language || navigator.userLanguage || 'en').toLowerCase();
+  return nav.startsWith('zh') ? 'zh-Hant' : 'en';
+}
+function loadLang() {
+  const saved = localStorage.getItem(LANG_KEY);
+  return (saved === 'zh-Hant' || saved === 'en') ? saved : detectLang();
+}
+let lang = loadLang();
+function t(key, params) {
+  let str = (I18N[lang] && I18N[lang][key]) || I18N.en[key] || key;
+  if (params) for (const k in params) str = str.replace('{' + k + '}', params[k]);
+  return str;
+}
+function applyStaticI18n() {
+  document.documentElement.lang = lang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  const toggle = $('#langToggle');
+  toggle.textContent = t('langToggleLabel');
+  toggle.title = t('langToggleTitle');
+}
+function setLang(l) {
+  lang = l;
+  localStorage.setItem(LANG_KEY, l);
+  applyStaticI18n();
+  renderAll();
+  if (dlg.open && editingId) openDialog(editingId);
+  poll(); // 伺服器端錯誤訊息(autoData[x].error)是依語言即時翻譯,重新輪詢才會更新成新語言
+}
+$('#langToggle').addEventListener('click', () => {
+  setLang(lang === 'zh-Hant' ? 'en' : 'zh-Hant');
+});
+
+// ---------------- 狀態 ----------------
+// [id, 名稱, 是否支援自動同步] — Kiro 由伺服器偵測 CLI 憑證,未登入時回報原因
+const BUILTINS = [
+  ['claude', 'Claude', true],
+  ['codex', 'Codex', true],
+  ['minimax', 'MiniMax', true],
+  ['kiro', 'Kiro', true],
+];
+let autoData = {};          // /api/usage 回傳的自動資料(不落地)
+let online = false;
+let lastSync = null;
+let state = load();
+
+function mkProvider(id, name, autoKey) {
+  const now = Date.now();
+  const p = {
+    id, name, autoKey: autoKey || null,
+    manual: {
+      session:  { usedPct: 35, resetsAt: now + 2 * 3600e3, windowMin: 300 },
+      context:  { usedPct: 20 },
+      longterm: { usedPct: 45, resetsAt: now + 3 * 86400e3, windowMin: 10080, label: '每週' }, // label 為內部標準值(中文),顯示時經 t() 翻譯
+    },
+  };
+  if (id === 'kiro') { // Kiro 是月配額制
+    p.manual.longterm = { usedPct: 0, resetsAt: now + 15 * 86400e3, windowMin: 43200, label: '每月' };
+  }
+  return p;
+}
+function mkBuiltin([id, name, hasAuto]) { return mkProvider(id, name, hasAuto ? id : null); }
+function defaultState() {
+  return { providers: BUILTINS.map(mkBuiltin) };
+}
+// 內建提供商只播種一次:升級後自動出現,使用者刪除後不會復活
+function seedBuiltins(s) {
+  s.seeded = Array.isArray(s.seeded) ? s.seeded
+    : s.providers.filter(p => BUILTINS.some(b => b[0] === p.id)).map(p => p.id);
+  let added = false;
+  for (const b of BUILTINS) {
+    if (!s.seeded.includes(b[0])) {
+      s.providers.push(mkBuiltin(b));
+      s.seeded.push(b[0]);
+      added = true;
+    }
+    // 遷移:內建提供商升級為自動同步時,補上既有列的 autoKey
+    const existing = s.providers.find(p => p.id === b[0]);
+    if (existing && b[2] && !existing.autoKey) {
+      existing.autoKey = b[0];
+      added = true;
+    }
+  }
+  if (added) localStorage.setItem(LS_KEY, JSON.stringify(s));
+  return s;
+}
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(LS_KEY));
+    if (s && Array.isArray(s.providers) && s.providers.length) return seedBuiltins(s);
+  } catch {}
+  return seedBuiltins(defaultState());
+}
+function save() { localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+
+// ---------------- 資料合成:自動優先,手動保底 ----------------
+function effective(p) {
+  const a = p.autoKey ? autoData[p.autoKey] : null;
+  const auto = (a && a.ok) ? a : null;
+  // src 為內部標準值('manual'/'auto'),顯示時經 t('srcManual'/'srcAuto') 翻譯
+  const sess = { ...p.manual.session, src: 'manual' };
+  const lt   = { ...p.manual.longterm, src: 'manual' };
+
+  if (auto && auto.session) {
+    if (auto.session.usedPct != null) { sess.usedPct = auto.session.usedPct; sess.src = 'auto'; }
+    if (auto.session.resetsAt) { const t = Date.parse(auto.session.resetsAt); if (!isNaN(t)) sess.resetsAt = t; }
+    if (auto.session.windowMinutes) sess.windowMin = auto.session.windowMinutes;
+  }
+  if (auto && auto.longterm) {
+    if (auto.longterm.usedPct != null) { lt.usedPct = auto.longterm.usedPct; lt.src = 'auto'; }
+    if (auto.longterm.resetsAt) { const t = Date.parse(auto.longterm.resetsAt); if (!isNaN(t)) lt.resetsAt = t; }
+    if (auto.longterm.windowMinutes) lt.windowMin = auto.longterm.windowMinutes;
+    if (auto.longtermLabel) lt.label = auto.longtermLabel;
+  }
+  // Context:只信本機 session 掃描結果;抓不到就標示無法讀取(灰色),不用假數字
+  let ctx = null;
+  const rawAuto = p.autoKey ? autoData[p.autoKey] : null;
+  if (rawAuto && Array.isArray(rawAuto.context) && rawAuto.context.length) {
+    ctx = { sessions: rawAuto.context };
+  }
+  return {
+    sess, lt, ctx,
+    autoState: p.autoKey ? (a ? (a.ok ? 'ok' : 'err') : 'wait') : 'none',
+    autoErr: (a && !a.ok) ? a.error : null,
+  };
+}
+
+// ---------------- 格式化 ----------------
+const pad = n => String(n).padStart(2, '0');
+function fmtDur(ms) {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600),
+        m = Math.floor(s % 3600 / 60), sec = s % 60;
+  const dayStr = d ? (d + (lang === 'zh-Hant' ? '天 ' : 'd ')) : '';
+  return dayStr + pad(h) + ':' + pad(m) + ':' + pad(sec);
+}
+function fmtAbs(ms) {
+  const t = new Date(ms);
+  return (t.getMonth() + 1) + '/' + t.getDate() + '(' + WEEKDAYS_I18N[lang][t.getDay()] + ') ' + pad(t.getHours()) + ':' + pad(t.getMinutes());
+}
+function hpClass(usedPct) {
+  if (usedPct >= 70) return 'r';   // 剩下 30% 以下 → 紅
+  if (usedPct >= 40) return 'y';   // 剩下 60% 以下 → 黃
+  return 'g';                      // 剩餘 60% 以上 → 綠
+}
+
+// ---------------- 渲染 ----------------
+function srcLabel(src) {
+  return src === 'auto' ? t('srcAuto') : src === 'manual' ? t('srcManual') : (src || '');
+}
+function hpCell(label, usedPct, src) {
+  const has = usedPct != null && isFinite(usedPct);
+  const used = has ? Math.min(100, Math.max(0, usedPct)) : 0;
+  const remain = 100 - used;
+  return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>
+      <div class="bar">
+        <div class="fill ${hpClass(used)}" style="width:${has ? remain : 0}%"></div>
+        <div class="ticks"></div>
+        <span class="bar-text">${has ? t('remainPct', { pct: remain.toFixed(remain < 10 ? 1 : 0) }) : '—'}</span>
+      </div>
+      <div class="sub">${has ? t('usedPct', { pct: used.toFixed(1) }) : t('editHintPlaceholder')}</div>
+    </div>`;
+}
+function ctxCell(ctx) {
+  if (!ctx) {
+    return `
+    <div class="metric">
+      <div class="metric-label"><span>${t('labelContextUsage')}</span><span class="src">—</span></div>
+      <div class="bar na"><span class="bar-text na-text">${t('naText')}</span></div>
+      <div class="sub">${t('naSub')}</div>
+    </div>`;
+  }
+  const list = ctx.sessions;
+  const s0 = list[0];
+  const used = Math.min(100, Math.max(0, s0.usedPct));
+  const remain = 100 - used;
+  const line = s => {
+    const r = 100 - Math.min(100, Math.max(0, s.usedPct));
+    return `<div class="ctx-line"><span class="ctx-name" title="${escapeHtml(s.label)}">${escapeHtml(s.label)}</span>
+      <div class="bar mini"><div class="fill ${hpClass(s.usedPct)}" style="width:${r}%"></div></div>
+      <span class="ctx-pct">${t('remainPct', { pct: r.toFixed(0) })}</span></div>`;
+  };
+  const sub = list.length > 1
+    ? `<details class="ctx-more"><summary>${t('activeSessionsCount', { label: escapeHtml(s0.label), n: list.length })}</summary>${list.map(line).join('')}</details>`
+    : `<div class="sub">${t('activeSessionUsed', { label: escapeHtml(s0.label), pct: used.toFixed(1) })}</div>`;
+  return `
+    <div class="metric">
+      <div class="metric-label"><span>${t('labelContextUsage')}</span><span class="src">${t('srcAuto')}</span></div>
+      <div class="bar">
+        <div class="fill ${hpClass(used)}" style="width:${remain}%"></div>
+        <div class="ticks"></div>
+        <span class="bar-text">${t('remainPct', { pct: remain.toFixed(remain < 10 ? 1 : 0) })}</span>
+      </div>
+      ${sub}
+    </div>`;
+}
+
+function cdCell(label, resetsAt, windowMin, src, pid, kind) {
+  const has = resetsAt != null && isFinite(resetsAt);
+  return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>
+      <div class="bar cd" data-cd data-pid="${pid}" data-kind="${kind}"
+           data-resets="${has ? resetsAt : ''}" data-window="${windowMin || ''}">
+        <div class="fill" style="width:0%"></div>
+        <div class="ticks"></div>
+        <span class="bar-text">—</span>
+      </div>
+      <div class="sub">${has ? t('resetAtTime', { time: fmtAbs(resetsAt) }) : t('noResetTime')}</div>
+    </div>`;
+}
+
+function ltLabelText(rawLabel) {
+  return rawLabel === '每月' ? t('ltMonthly') : t('ltWeekly');
+}
+function renderAll() {
+  const box = $('#rows');
+  if (!state.providers.length) {
+    box.innerHTML = `<p class="empty-note">${t('emptyNote')}</p>`;
+    return;
+  }
+  const lastIdx = state.providers.length - 1;
+  box.innerHTML = state.providers.map((p, idx) => {
+    const e = effective(p);
+    const dotCls = e.autoState === 'ok' ? 'ok' : (e.autoState === 'err' ? 'err' : '');
+    const modeTxt = e.autoState === 'ok' ? t('modeAuto') :
+                    e.autoState === 'err' ? t('modeAutoErr') :
+                    e.autoState === 'wait' ? t('modeWait') : t('modeManual');
+    return `
+    <section class="row" data-row="${p.id}" draggable="true">
+      <div class="prov">
+        <div class="prov-name"><span class="drag-handle" title="${t('dragTitle')}">⠿</span>${escapeHtml(p.name)}</div>
+        <div class="prov-meta"><span class="dot ${dotCls}"></span>${modeTxt}</div>
+        ${e.autoErr ? `<div class="prov-err">${escapeHtml(e.autoErr)}</div>` : ''}
+        <button class="edit-btn" data-edit="${p.id}">${t('editBtnLabel')}</button>
+        <div class="move-btns">
+          <button data-move="up" data-pid="${p.id}" ${idx === 0 ? 'disabled' : ''} title="${t('moveUpTitle')}">▲</button>
+          <button data-move="down" data-pid="${p.id}" ${idx === lastIdx ? 'disabled' : ''} title="${t('moveDownTitle')}">▼</button>
+        </div>
+      </div>
+      <div class="metrics">
+        ${hpCell(t('labelCurrentUsage'), e.sess.usedPct, e.sess.src)}
+        ${cdCell(t('labelNextRespawn'), e.sess.resetsAt, e.sess.windowMin, e.sess.src, p.id, 'session')}
+        ${ctxCell(e.ctx)}
+        ${hpCell(t('usageOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.usedPct, e.lt.src)}
+        ${cdCell(t('respawnOfLabel', { label: ltLabelText(e.lt.label) }), e.lt.resetsAt, e.lt.windowMin, e.lt.src, p.id, 'longterm')}
+      </div>
+    </section>`;
+  }).join('');
+
+  box.querySelectorAll('[data-edit]').forEach(b =>
+    b.addEventListener('click', () => openDialog(b.dataset.edit)));
+  box.querySelectorAll('[data-move]').forEach(b =>
+    b.addEventListener('click', () => moveProvider(b.dataset.pid, b.dataset.move)));
+  wireDragSort(box);
+  tick();
+}
+
+function moveProvider(id, dir) {
+  const i = state.providers.findIndex(p => p.id === id);
+  const j = dir === 'up' ? i - 1 : i + 1;
+  if (i < 0 || j < 0 || j >= state.providers.length) return;
+  [state.providers[i], state.providers[j]] = [state.providers[j], state.providers[i]];
+  save();
+  renderAll();
+}
+
+// ---------------- 上下拖拉排序 ----------------
+let dragId = null;
+let dragFromHandle = false;
+function clearDragMarks() {
+  document.querySelectorAll('.row.drag-over-top, .row.drag-over-bottom')
+    .forEach(r => r.classList.remove('drag-over-top', 'drag-over-bottom'));
+}
+function wireDragSort(box) {
+  box.querySelectorAll('.row').forEach(row => {
+    const handle = row.querySelector('.drag-handle');
+    handle.addEventListener('mousedown', () => { dragFromHandle = true; });
+    row.addEventListener('dragstart', e => {
+      if (!dragFromHandle) { e.preventDefault(); return; } // 只允許從 ⠿ 把手拖
+      dragId = row.dataset.row;
+      row.classList.add('dragging');
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', dragId);
+    });
+    row.addEventListener('dragend', () => {
+      dragFromHandle = false;
+      dragId = null;
+      row.classList.remove('dragging');
+      clearDragMarks();
+    });
+    row.addEventListener('dragover', e => {
+      if (!dragId || row.dataset.row === dragId) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = row.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      row.classList.toggle('drag-over-top', before);
+      row.classList.toggle('drag-over-bottom', !before);
+    });
+    row.addEventListener('dragleave', () => {
+      row.classList.remove('drag-over-top', 'drag-over-bottom');
+    });
+    row.addEventListener('drop', e => {
+      e.preventDefault();
+      const id = dragId || e.dataTransfer.getData('text/plain');
+      if (!id || row.dataset.row === id) return;
+      const rect = row.getBoundingClientRect();
+      const before = e.clientY < rect.top + rect.height / 2;
+      const list = state.providers;
+      const fromIdx = list.findIndex(p => p.id === id);
+      if (fromIdx < 0) return;
+      const [moved] = list.splice(fromIdx, 1);
+      let toIdx = list.findIndex(p => p.id === row.dataset.row);
+      if (!before) toIdx++;
+      list.splice(toIdx, 0, moved);
+      dragId = null;
+      dragFromHandle = false;
+      save();
+      renderAll();
+    });
+  });
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+// ---------------- 每秒心跳:倒數條 + 手動模式到期翻新 ----------------
+const SOON_MS = 30 * 60000; // 剩不到 30 分鐘 → 外框開始發亮蓄力
+function tick() {
+  const now = Date.now();
+  document.querySelectorAll('[data-cd]').forEach(el => {
+    const resets = Number(el.dataset.resets);
+    const winMs = Number(el.dataset.window) * 60000;
+    const fill = el.querySelector('.fill');
+    const text = el.querySelector('.bar-text');
+    if (!resets) { fill.style.width = '0%'; text.textContent = '—'; el.classList.remove('soon', 'ready'); return; }
+    const remain = resets - now;
+    if (remain <= 0) {
+      el.classList.remove('soon');
+      el.classList.add('ready');
+      fill.style.width = '100%';
+      text.textContent = t('readyText');
+      return;
+    }
+    el.classList.remove('ready');
+    if (remain <= SOON_MS) {
+      el.classList.add('soon');
+      const frac = Math.min(1, Math.max(0, remain / SOON_MS)); // 1 = 剛進 30 分鐘,0 = 快到了
+      el.style.setProperty('--charge-speed', (0.35 + frac * 1.25).toFixed(2) + 's');
+    } else {
+      el.classList.remove('soon');
+      el.style.removeProperty('--charge-speed');
+    }
+    const frac = winMs > 0 ? Math.min(1, Math.max(0, 1 - remain / winMs)) : 0;
+    fill.style.width = (frac * 100).toFixed(2) + '%';
+    text.textContent = fmtDur(remain);
+  });
+
+  // 手動模式:重置時間過了 → 自動推進到下一週期,使用率歸零
+  let changed = false;
+  for (const p of state.providers) {
+    const e = effective(p);
+    for (const [kind, eff] of [['session', e.sess], ['longterm', e.lt]]) {
+      if (eff.src !== 'manual') continue;
+      const m = p.manual[kind];
+      if (m.resetsAt && m.windowMin && m.resetsAt <= now) {
+        while (m.resetsAt <= now) m.resetsAt += m.windowMin * 60000;
+        m.usedPct = 0;
+        changed = true;
+      }
+    }
+  }
+  if (changed) { save(); renderAll(); }
+}
+setInterval(tick, 1000);
+
+// ---------------- 向本機伺服器輪詢 ----------------
+async function poll() {
+  try {
+    const r = await fetch('api/usage?lang=' + lang, { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const j = await r.json();
+    autoData = j.providers || {};
+    online = true;
+    lastSync = Date.now();
+  } catch {
+    online = false;
+  }
+  $('#statusDot').className = 'dot ' + (online ? 'ok' : '');
+  $('#statusText').textContent = online
+    ? t('serverConnected', { time: fmtAbs(lastSync) })
+    : t('offlineMode');
+  renderAll();
+}
+setInterval(poll, 60000);
+
+// ---------------- 編輯視窗 ----------------
+const dlg = $('#dlg');
+let editingId = null;
+
+function toLocalInput(ms) {
+  if (!ms || !isFinite(ms)) return '';
+  const t = new Date(ms - new Date().getTimezoneOffset() * 60000);
+  return t.toISOString().slice(0, 16);
+}
+function fromLocalInput(v) {
+  if (!v) return null;
+  const t = Date.parse(v);
+  return isNaN(t) ? null : t;
+}
+
+let toastTimer = null;
+function toast(msg, isErr) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'show' + (isErr ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { t.className = ''; }, 6000);
+}
+
+async function saveMinimaxKey(key) {
+  try {
+    const r = await fetch('api/minimax/key', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ apiKey: key, lang }),
+    });
+    const j = await r.json();
+    if (!j.ok) { toast(t('saveFailed', { err: j.error || 'HTTP ' + r.status }), true); return; }
+    if (j.cleared) {
+      toast(t('keyCleared'));
+      if (autoData.minimax) autoData.minimax.keySet = false;
+    } else if (j.test) {
+      autoData.minimax = j.test; // 立即反映,不等下一次輪詢
+      if (j.test.ok) toast(t('keySavedSuccess'));
+      else toast(t('keySavedTestFailed', { err: j.test.error || t('unknownError') }), true);
+    }
+    renderAll();
+    await poll();
+  } catch {
+    toast(t('offlineCantSave'), true);
+  }
+}
+
+function openDialog(pid) {
+  editingId = pid;
+  const p = state.providers.find(x => x.id === pid);
+  if (!p) return;
+  $('#dlgTitle').textContent = t('editDlgTitle');
+  const isAuto = pid && p.autoKey && autoData[p.autoKey] && autoData[p.autoKey].ok;
+  $('#dlgHint').textContent = isAuto ? t('dlgHintAuto') : t('dlgHintManual');
+  $('#fName').value = p.name;
+  $('#fSessPct').value = p.manual.session.usedPct ?? '';
+  $('#fSessReset').value = toLocalInput(p.manual.session.resetsAt);
+  $('#fSessWin').value = p.manual.session.windowMin ?? 300;
+  $('#fLtLabel').value = p.manual.longterm.label || '每週';
+  $('#fLtPct').value = p.manual.longterm.usedPct ?? '';
+  $('#fLtReset').value = toLocalInput(p.manual.longterm.resetsAt);
+  $('#fLtWin').value = p.manual.longterm.windowMin ?? 10080;
+  $('#delBtn').style.display = pid ? '' : 'none';
+
+  // MiniMax 專屬:網頁輸入 API Key(伺服器端加密儲存)
+  const isMinimax = p.autoKey === 'minimax';
+  $('#fKeyFs').style.display = isMinimax ? '' : 'none';
+  if (isMinimax) {
+    const mm = autoData.minimax;
+    $('#fApiKey').value = '';
+    $('#fApiKey').placeholder = (mm && mm.keySet) ? t('keyPlaceholderSet') : t('keyPlaceholderEmpty');
+    $('#clearKeyBtn').style.display = (mm && mm.keySet) ? '' : 'none';
+  }
+  dlg.showModal();
+}
+
+$('#dlgForm').addEventListener('submit', () => {
+  const numOr = (v, fb) => { const n = parseFloat(v); return isFinite(n) ? n : fb; };
+  const p = editingId ? state.providers.find(x => x.id === editingId) : null;
+  if (!p) return;
+  p.name = $('#fName').value.trim() || p.name || t('unnamedDefault');
+  p.manual.session.usedPct = numOr($('#fSessPct').value, null);
+  p.manual.session.resetsAt = fromLocalInput($('#fSessReset').value);
+  p.manual.session.windowMin = numOr($('#fSessWin').value, 300);
+  p.manual.longterm.label = $('#fLtLabel').value;
+  p.manual.longterm.usedPct = numOr($('#fLtPct').value, null);
+  p.manual.longterm.resetsAt = fromLocalInput($('#fLtReset').value);
+  p.manual.longterm.windowMin = numOr($('#fLtWin').value, 10080);
+  save(); renderAll();
+
+  const newKey = $('#fApiKey').value.trim();
+  if (p.autoKey === 'minimax' && newKey) saveMinimaxKey(newKey);
+});
+$('#clearKeyBtn').addEventListener('click', () => {
+  if (confirm(t('confirmClearKey'))) {
+    saveMinimaxKey('');
+    dlg.close();
+  }
+});
+$('#cancelBtn').addEventListener('click', () => dlg.close());
+$('#delBtn').addEventListener('click', () => {
+  if (!editingId) return;
+  const p = state.providers.find(x => x.id === editingId);
+  if (p && confirm(t('confirmDelete', { name: p.name }))) {
+    state.providers = state.providers.filter(x => x.id !== editingId);
+    save(); dlg.close(); renderAll();
+  }
+});
+// 新增提供商:只列出有支援自動同步、且尚未在儀表板上的
+const addDlg = $('#addDlg');
+$('#addBtn').addEventListener('click', () => {
+  const missing = BUILTINS.filter(([id]) => !state.providers.some(p => p.id === id));
+  if (!missing.length) {
+    const sep = lang === 'zh-Hant' ? '、' : ', ';
+    toast(t('allProvidersAdded', { list: BUILTINS.map(b => b[1]).join(sep) }));
+    return;
+  }
+  $('#addList').innerHTML = missing.map(([id, name, hasAuto]) =>
+    `<button type="button" class="primary" data-add="${id}">${name}${hasAuto ? '' : t('manualSuffix')}</button>`).join('');
+  $('#addList').querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
+    const key = b.dataset.add;
+    const entry = BUILTINS.find(x => x[0] === key);
+    const name = entry[1];
+    state.providers.push(mkBuiltin(entry));
+    if (!state.seeded.includes(key)) state.seeded.push(key);
+    save();
+    renderAll();
+    addDlg.close();
+    toast(t('providerAdded', { name }));
+    poll();
+  }));
+  addDlg.showModal();
+});
+$('#addCancel').addEventListener('click', () => addDlg.close());
+
+// ---------------- 啟動 ----------------
+applyStaticI18n();
+renderAll();
+poll();
+</script>
+</body>
+</html>

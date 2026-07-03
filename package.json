@@ -1,0 +1,8 @@
+{
+  "name": "ai-usage-dashboard",
+  "private": true,
+  "description": "本機執行的 AI 用量儀表板(零執行期依賴,單檔前端 + Node 內建模組伺服器)",
+  "devDependencies": {
+    "playwright": "^1.61.1"
+  }
+}

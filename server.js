@@ -1,0 +1,633 @@
+#!/usr/bin/env node
+'use strict';
+// AI 使用量儀表板 — 本機伺服器
+// 職責:1) 提供 index.html  2) /api/usage 讀取本機 CLI 憑證,向官方端點查詢使用量
+// 安全:只綁定 127.0.0.1;token 只在本機使用,絕不傳給前端。
+
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crypto = require('crypto');
+const { execSync } = require('child_process');
+
+const PORT = 3789;
+const ROOT = __dirname;
+
+// ---------- 錯誤訊息 i18n:回傳 errCode+errParams,翻譯延後到回應序列化階段 ----------
+// 這樣快取(upstreamCache)裡存的是語言無關的代碼,不會被某次請求的語言污染下次請求。
+const SERR = {
+  'zh-Hant': {
+    DECRYPT_FAIL: '解密失敗(硬體識別碼變更?)請在 config.json 重新填入 apiKey',
+    NO_CLAUDE_CRED: '找不到 Claude 憑證 (~/.claude/.credentials.json)',
+    CLAUDE_TOKEN_EXPIRED: 'Claude token 已過期,請執行任一 claude 指令讓它自動刷新',
+    CONN_FAIL: '連線 {service} 失敗: {msg}',
+    HTTP_ERR: '{service} API 回應 HTTP {status}',
+    PARSE_FAIL: '無法解析 {service} API 回應',
+    FORMAT_UNEXPECTED: '{service} 回應格式不符預期',
+    NO_CODEX_CRED: '找不到 Codex 憑證 (~/.codex/auth.json)',
+    CODEX_CONN_FAIL: '連線失敗: {msg}',
+    CODEX_HTTP_ERR: 'HTTP {status} ({urlTail})',
+    CODEX_PARSE_FAIL: '無法解析回應',
+    CODEX_FORMAT_UNEXPECTED: '回應格式不符預期',
+    UNKNOWN_ERROR: '未知錯誤',
+    MINIMAX_NO_KEY: '尚未設定 API Key:點此列「✎ 編輯」直接輸入(會加密儲存)',
+    MINIMAX_STATUS_ERR: 'MiniMax: {msg}',
+    MINIMAX_UNKNOWN_FORMAT: '已連上但回應格式未知(原始回應已印在伺服器視窗)',
+    KIRO_NOT_LOGGED_IN: '尚未使用 Kiro CLI 登入,無法取得',
+    KIRO_DETECTED_NOT_IMPLEMENTED: '偵測到 Kiro 憑證,但自動同步尚未實作(請回報以便接線)',
+    STALE_BACKOFF: '退避中(避免觸發限流),沿用舊資料',
+    UNEXPECTED_EXCEPTION: '發生非預期錯誤: {msg}',
+  },
+  en: {
+    DECRYPT_FAIL: 'Decryption failed (hardware ID changed?) — please re-enter apiKey in config.json',
+    NO_CLAUDE_CRED: 'Claude credentials not found (~/.claude/.credentials.json)',
+    CLAUDE_TOKEN_EXPIRED: 'Claude token has expired — run any `claude` command to let it refresh automatically',
+    CONN_FAIL: 'Failed to connect to {service}: {msg}',
+    HTTP_ERR: '{service} API responded with HTTP {status}',
+    PARSE_FAIL: 'Failed to parse {service} API response',
+    FORMAT_UNEXPECTED: '{service} response format did not match expectations',
+    NO_CODEX_CRED: 'Codex credentials not found (~/.codex/auth.json)',
+    CODEX_CONN_FAIL: 'Connection failed: {msg}',
+    CODEX_HTTP_ERR: 'HTTP {status} ({urlTail})',
+    CODEX_PARSE_FAIL: 'Failed to parse response',
+    CODEX_FORMAT_UNEXPECTED: 'Response format did not match expectations',
+    UNKNOWN_ERROR: 'Unknown error',
+    MINIMAX_NO_KEY: 'API Key not set yet — click "✎ Edit" on this row to enter it (it will be encrypted and stored)',
+    MINIMAX_STATUS_ERR: 'MiniMax: {msg}',
+    MINIMAX_UNKNOWN_FORMAT: 'Connected, but the response format is unknown (raw response printed to the server console)',
+    KIRO_NOT_LOGGED_IN: 'Kiro CLI is not logged in yet — usage cannot be fetched',
+    KIRO_DETECTED_NOT_IMPLEMENTED: 'Kiro credentials detected, but auto sync is not implemented yet (please report so we can wire it up)',
+    STALE_BACKOFF: 'Backing off to avoid rate limits — using cached data',
+    UNEXPECTED_EXCEPTION: 'Unexpected error: {msg}',
+  },
+};
+function terr(code, lang, params) {
+  const dict = SERR[lang] || SERR['zh-Hant'];
+  let str = dict[code] || code;
+  if (params) for (const k in params) str = str.split('{' + k + '}').join(params[k]);
+  return str;
+}
+// 把快取物件裡的 errCode/staleErrCode 依語言翻成 error/staleError 字串;回傳新物件,不動到原快取物件
+function localizeResult(r, lang) {
+  if (!r || typeof r !== 'object') return r;
+  const out = { ...r };
+  if (out.errCode) out.error = terr(out.errCode, lang, out.errParams);
+  if (out.staleErrCode) out.staleError = terr(out.staleErrCode, lang, out.staleErrParams);
+  return out;
+}
+
+// ---------- 機密加密:AES-256-GCM,金鑰由本機硬體識別碼衍生 ----------
+// 金鑰 = SHA-256(硬體識別碼),檔案綁定本機:複製到別台電腦無法解密。
+// 依作業系統取得識別碼來源不同(Windows:BIOS 序號+MachineGuid;macOS:IOPlatformUUID;
+// Linux:/etc/machine-id)。注意:這防的是「檔案被拷走」,擋不了在本機執行的程式 — 屬於
+// 綁定式保護而非絕對保密。
+let cachedMachineKey = null;
+function machineKey() {
+  if (cachedMachineKey) return cachedMachineKey;
+  const id = getHardwareId();
+  if (!id) throw new Error('無法取得本機硬體識別碼,無法加解密');
+  cachedMachineKey = crypto.createHash('sha256').update('aiDash-v1|' + id).digest();
+  return cachedMachineKey;
+}
+
+function getHardwareId() {
+  const plat = os.platform();
+  if (plat === 'win32') return getHardwareIdWin();
+  if (plat === 'darwin') return getHardwareIdMac();
+  return getHardwareIdLinux(); // Linux 及其他 Unix-like
+}
+
+function getHardwareIdWin() {
+  let bios = '', guid = '';
+  try {
+    bios = execSync(
+      'powershell -NoProfile -Command "(Get-CimInstance Win32_BIOS).SerialNumber"',
+      { timeout: 15000 }).toString().trim();
+  } catch {}
+  try {
+    const out = execSync(
+      'reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid',
+      { timeout: 15000 }).toString();
+    const m = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
+    if (m) guid = m[1];
+  } catch {}
+  return (bios || guid) ? (bios + '|' + guid) : '';
+}
+
+function getHardwareIdMac() {
+  try {
+    const out = execSync('ioreg -rd1 -c IOPlatformExpertDevice', { timeout: 15000 }).toString();
+    const m = out.match(/"IOPlatformUUID"\s*=\s*"([^"]+)"/);
+    if (m) return m[1];
+  } catch {}
+  return '';
+}
+
+function getHardwareIdLinux() {
+  for (const p of ['/etc/machine-id', '/var/lib/dbus/machine-id']) {
+    try {
+      const id = fs.readFileSync(p, 'utf8').trim();
+      if (id) return id;
+    } catch {}
+  }
+  return '';
+}
+
+const ENC_PREFIX = 'enc:v1:';
+function encryptSecret(plain) {
+  const iv = crypto.randomBytes(12);
+  const c = crypto.createCipheriv('aes-256-gcm', machineKey(), iv);
+  const data = Buffer.concat([c.update(plain, 'utf8'), c.final()]);
+  return ENC_PREFIX + Buffer.concat([iv, c.getAuthTag(), data]).toString('base64');
+}
+function decryptSecret(sealed) {
+  const buf = Buffer.from(sealed.slice(ENC_PREFIX.length), 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', machineKey(), buf.subarray(0, 12));
+  d.setAuthTag(buf.subarray(12, 28));
+  return Buffer.concat([d.update(buf.subarray(28)), d.final()]).toString('utf8');
+}
+
+// 讀取 MiniMax key:發現純文字就地加密改寫(自我封印),之後只存密文
+function getMinimaxKey() {
+  if (process.env.MINIMAX_API_KEY) return { key: process.env.MINIMAX_API_KEY };
+  const cfgPath = path.join(ROOT, 'config.json');
+  const cfg = readJsonSafe(cfgPath);
+  if (!cfg || !cfg.minimax) return { key: '' };
+  const mm = cfg.minimax;
+  if (mm.apiKey && String(mm.apiKey).trim()) {
+    const plain = String(mm.apiKey).trim();
+    try {
+      mm.apiKeyEnc = encryptSecret(plain);
+      delete mm.apiKey;
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+      console.log('[config] minimax.apiKey 已以 AES-256-GCM(硬體綁定金鑰)加密存回 config.json');
+    } catch (e) {
+      console.log('[config] 加密失敗,暫以明文使用: ' + e.message);
+    }
+    return { key: plain };
+  }
+  if (mm.apiKeyEnc && String(mm.apiKeyEnc).startsWith(ENC_PREFIX)) {
+    try {
+      return { key: decryptSecret(mm.apiKeyEnc) };
+    } catch {
+      return { key: '', errCode: 'DECRYPT_FAIL' };
+    }
+  }
+  return { key: '' };
+}
+
+function readJsonSafe(p) {
+  try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; }
+}
+const num = v => (typeof v === 'number' && isFinite(v)) ? v : null;
+
+// ---------- Claude (Anthropic OAuth usage endpoint,即 claude /usage 背後的 API) ----------
+async function fetchClaude() {
+  const credPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  const cred = readJsonSafe(credPath);
+  const oauth = cred && cred.claudeAiOauth;
+  if (!oauth || !oauth.accessToken) {
+    return { ok: false, errCode: 'NO_CLAUDE_CRED' };
+  }
+  if (oauth.expiresAt && Date.now() > oauth.expiresAt) {
+    return { ok: false, errCode: 'CLAUDE_TOKEN_EXPIRED' };
+  }
+  let res;
+  try {
+    res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+      headers: {
+        'Authorization': 'Bearer ' + oauth.accessToken,
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Content-Type': 'application/json',
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (e) {
+    return { ok: false, errCode: 'CONN_FAIL', errParams: { service: 'Anthropic', msg: e.message } };
+  }
+  if (!res.ok) return { ok: false, errCode: 'HTTP_ERR', errParams: { service: 'Anthropic', status: res.status } };
+  const data = await res.json().catch(() => null);
+  if (!data) return { ok: false, errCode: 'PARSE_FAIL', errParams: { service: 'Anthropic' } };
+
+  const pick = (o, windowMinutes) => (o && typeof o === 'object' && num(o.utilization) != null)
+    ? { usedPct: num(o.utilization), resetsAt: o.resets_at || null, windowMinutes }
+    : null;
+  const session = pick(data.five_hour, 300);
+  const longterm = pick(data.seven_day, 10080);
+  if (!session && !longterm) return { ok: false, errCode: 'FORMAT_UNEXPECTED', errParams: { service: 'Anthropic' } };
+
+  const extra = [];
+  const opus = pick(data.seven_day_opus, 10080);
+  if (opus) extra.push({ label: 'Opus 每週', ...opus });
+  return { ok: true, session, longterm, longtermLabel: '每週', extra };
+}
+
+// ---------- Codex (ChatGPT 後端 rate-limit 端點,best-effort) ----------
+function normalizeCodexWindow(w) {
+  if (!w || typeof w !== 'object') return null;
+  const usedPct = num(w.used_percent ?? w.usedPercent ?? w.utilization);
+  if (usedPct == null) return null;
+  const winSec = num(w.limit_window_seconds ?? w.window_seconds);
+  const windowMinutes = winSec != null ? Math.round(winSec / 60)
+    : num(w.window_minutes ?? w.window_duration_mins ?? w.windowMinutes);
+  let resetsAt = null;
+  const resetUnix = num(w.reset_at ?? w.resets_at);
+  if (resetUnix != null && resetUnix > 1e9) {
+    resetsAt = new Date(resetUnix * 1000).toISOString();
+  } else if (typeof w.resets_at === 'string') {
+    resetsAt = w.resets_at;
+  } else if (num(w.reset_after_seconds ?? w.resets_in_seconds) != null) {
+    resetsAt = new Date(Date.now() + (w.reset_after_seconds ?? w.resets_in_seconds) * 1000).toISOString();
+  }
+  return { usedPct, resetsAt, windowMinutes };
+}
+
+function normalizeCodex(data) {
+  const rl = data.rate_limit || data.rate_limits || data.rateLimits || data;
+  if (!rl || typeof rl !== 'object') return null;
+  const session = normalizeCodexWindow(rl.primary_window || rl.primary || rl.five_hour);
+  const longterm = normalizeCodexWindow(rl.secondary_window || rl.secondary || rl.weekly || rl.monthly);
+  if (!session && !longterm) return null;
+  const mins = longterm && longterm.windowMinutes;
+  const longtermLabel = mins ? (mins >= 20000 ? '每月' : '每週') : '每週';
+  return { session, longterm, longtermLabel };
+}
+
+async function fetchCodex() {
+  const authPath = path.join(os.homedir(), '.codex', 'auth.json');
+  const auth = readJsonSafe(authPath);
+  const tokens = auth && auth.tokens;
+  if (!tokens || !tokens.access_token) {
+    return { ok: false, errCode: 'NO_CODEX_CRED' };
+  }
+  const headers = {
+    'Authorization': 'Bearer ' + tokens.access_token,
+    'Content-Type': 'application/json',
+    'originator': 'codex_cli_rs',
+    'User-Agent': 'codex_cli_rs',
+  };
+  if (tokens.account_id) headers['chatgpt-account-id'] = tokens.account_id;
+
+  const urls = [
+    'https://chatgpt.com/backend-api/wham/usage',
+    'https://chatgpt.com/backend-api/codex/usage',
+  ];
+  let lastErr = null;
+  for (const url of urls) {
+    let res;
+    try {
+      res = await fetch(url, { headers, signal: AbortSignal.timeout(10000) });
+    } catch (e) { lastErr = { errCode: 'CODEX_CONN_FAIL', errParams: { msg: e.message } }; continue; }
+    if (!res.ok) { lastErr = { errCode: 'CODEX_HTTP_ERR', errParams: { status: res.status, urlTail: url.split('/').pop() } }; continue; }
+    const data = await res.json().catch(() => null);
+    if (!data) { lastErr = { errCode: 'CODEX_PARSE_FAIL' }; continue; }
+    const norm = normalizeCodex(data);
+    if (norm) return { ok: true, ...norm };
+    lastErr = { errCode: 'CODEX_FORMAT_UNEXPECTED' };
+  }
+  return { ok: false, ...(lastErr || { errCode: 'UNKNOWN_ERROR' }) };
+}
+
+// ---------- MiniMax (Token/Coding Plan remains 端點,需在 config.json 填 API Key) ----------
+function normalizeMinimaxWindow(o, defMin) {
+  if (!o || typeof o !== 'object') return null;
+  let used = num(o.used_percent ?? o.usage_percent ?? o.utilization ?? o.percent);
+  if (used == null) {
+    const usedAbs = num(o.used ?? o.used_tokens);
+    const total = num(o.total ?? o.limit ?? o.quota ?? o.total_tokens);
+    if (usedAbs != null && total > 0) used = usedAbs / total * 100;
+    else {
+      const remain = num(o.remains ?? o.remaining ?? o.left);
+      if (remain != null && total > 0) used = (1 - remain / total) * 100;
+    }
+  }
+  if (used == null) return null;
+  let resetsAt = null;
+  const rRaw = o.reset_at ?? o.reset_time ?? o.next_reset_time ?? o.refresh_time;
+  const r = num(rRaw);
+  if (r != null && r > 1e9) resetsAt = new Date(r > 1e12 ? r : r * 1000).toISOString();
+  else if (typeof rRaw === 'string' && rRaw) resetsAt = rRaw;
+  else if (num(o.reset_after_seconds) != null) {
+    resetsAt = new Date(Date.now() + o.reset_after_seconds * 1000).toISOString();
+  }
+  const winSec = num(o.limit_window_seconds ?? o.window_seconds);
+  return {
+    usedPct: Math.round(used * 10) / 10,
+    resetsAt,
+    windowMinutes: winSec != null ? Math.round(winSec / 60) : defMin,
+  };
+}
+
+function normalizeMinimax(data) {
+  // 實際格式(2026-07 實測):model_remains[] 依模型分列,百分比為「剩餘」
+  const arr = Array.isArray(data.model_remains) ? data.model_remains : null;
+  if (arr && arr.length) {
+    const m = arr.find(x => x && x.model_name === 'general') || arr[0];
+    let session = null;
+    if (num(m.current_interval_remaining_percent) != null) {
+      session = {
+        usedPct: Math.round((100 - m.current_interval_remaining_percent) * 10) / 10,
+        resetsAt: num(m.end_time) ? new Date(m.end_time).toISOString() : null,
+        windowMinutes: (num(m.end_time) != null && num(m.start_time) != null)
+          ? Math.round((m.end_time - m.start_time) / 60000) : 300,
+      };
+    }
+    let longterm = null;
+    if (num(m.current_weekly_remaining_percent) != null) {
+      longterm = {
+        usedPct: Math.round((100 - m.current_weekly_remaining_percent) * 10) / 10,
+        resetsAt: num(m.weekly_end_time) ? new Date(m.weekly_end_time).toISOString() : null,
+        windowMinutes: (num(m.weekly_end_time) != null && num(m.weekly_start_time) != null)
+          ? Math.round((m.weekly_end_time - m.weekly_start_time) / 60000) : 10080,
+      };
+    }
+    if (session || longterm) return { session, longterm, longtermLabel: '每週' };
+    return null;
+  }
+  // 通用備援:若日後格式再變,盡力猜常見鍵名
+  const root = data.data || data.remains || data;
+  if (!root || typeof root !== 'object') return null;
+  const session = normalizeMinimaxWindow(
+    root.five_hour ?? root.hourly ?? root.window_5h ?? root.primary_window, 300);
+  const longterm = normalizeMinimaxWindow(
+    root.weekly ?? root.seven_day ?? root.week ?? root.secondary_window, 10080);
+  if (!session && !longterm) return null;
+  return { session, longterm, longtermLabel: '每週' };
+}
+
+async function fetchMinimax() {
+  const { key: apiKey, errCode: keyErrCode } = getMinimaxKey();
+  const keySet = !!apiKey;
+  if (keyErrCode) return { ok: false, keySet, errCode: keyErrCode };
+  if (!apiKey) {
+    return { ok: false, keySet, errCode: 'MINIMAX_NO_KEY' };
+  }
+  let res;
+  try {
+    res = await fetch('https://www.minimax.io/v1/token_plan/remains', {
+      headers: { 'Authorization': 'Bearer ' + apiKey, 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch (e) {
+    return { ok: false, keySet, errCode: 'CONN_FAIL', errParams: { service: 'MiniMax', msg: e.message } };
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok) return { ok: false, keySet, errCode: 'HTTP_ERR', errParams: { service: 'MiniMax', status: res.status } };
+  if (!data) return { ok: false, keySet, errCode: 'PARSE_FAIL', errParams: { service: 'MiniMax' } };
+  if (data.base_resp && data.base_resp.status_code) {
+    return { ok: false, keySet, errCode: 'MINIMAX_STATUS_ERR', errParams: { msg: data.base_resp.status_msg || 'status ' + data.base_resp.status_code } };
+  }
+  const norm = normalizeMinimax(data);
+  if (norm) return { ok: true, keySet, ...norm };
+  console.log('[minimax] 未知回應格式,請將以下內容回報以便修正解析器:');
+  console.log(JSON.stringify(data).slice(0, 2000));
+  return { ok: false, keySet, errCode: 'MINIMAX_UNKNOWN_FORMAT' };
+}
+
+// ---------- 讀取 POST body(上限 64KB) ----------
+function readBody(req, limit = 65536) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', c => {
+      size += c.length;
+      if (size > limit) { reject(new Error('body too large')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+// ---------- Kiro(尚無公開 usage API;先偵測本機是否有 CLI 憑證) ----------
+async function fetchKiro() {
+  const candidates = [
+    path.join(os.homedir(), '.kiro'),
+    path.join(os.homedir(), '.aws', 'sso', 'cache'),
+    process.env.APPDATA ? path.join(process.env.APPDATA, 'kiro') : null,
+    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'kiro') : null,
+  ].filter(Boolean);
+  const found = candidates.some(p => { try { return fs.existsSync(p); } catch { return false; } });
+  if (!found) {
+    return { ok: false, errCode: 'KIRO_NOT_LOGGED_IN' };
+  }
+  // 偵測到憑證後的實際查詢待 Kiro CLI 安裝後探測實作
+  return { ok: false, errCode: 'KIRO_DETECTED_NOT_IMPLEMENTED' };
+}
+
+// ---------- Context 使用率:掃描本機 CLI session 記錄(只讀檔尾,成本極低) ----------
+const ACTIVE_MS = 30 * 60000; // 30 分鐘內有寫入才算活躍 session
+const pad2 = n => String(n).padStart(2, '0');
+
+function tailLines(file, bytes = 262144) {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(bytes, size);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    return buf.toString('utf8').split('\n').filter(Boolean);
+  } finally { fs.closeSync(fd); }
+}
+
+// Claude Code:~/.claude/projects/<專案>/<session>.jsonl,每則訊息帶 token usage
+function parseClaudeTail(fp) {
+  let lines;
+  try { lines = tailLines(fp); } catch { return null; }
+  let tokens = null, cwd = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let j;
+    try { j = JSON.parse(lines[i]); } catch { continue; } // 檔尾第一行可能被截斷,跳過
+    if (!cwd && typeof j.cwd === 'string') cwd = j.cwd;
+    const u = j.message && j.message.usage;
+    if (tokens == null && u && num(u.input_tokens) != null) {
+      tokens = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0);
+    }
+    if (tokens != null && cwd) break;
+  }
+  if (tokens == null) return null;
+  const CTX_WINDOW = 200000;
+  const label = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : path.basename(fp).slice(0, 8);
+  return { label, usedPct: Math.min(100, Math.round(tokens / CTX_WINDOW * 1000) / 10) };
+}
+
+function scanClaudeContext() {
+  const root = path.join(os.homedir(), '.claude', 'projects');
+  let dirs;
+  try { dirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory()); } catch { return []; }
+  const now = Date.now();
+  const sessions = [];
+  for (const d of dirs) {
+    const dir = path.join(root, d.name);
+    let files;
+    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const fp = path.join(dir, f);
+      let st;
+      try { st = fs.statSync(fp); } catch { continue; }
+      if (now - st.mtimeMs > ACTIVE_MS) continue; // mtime 預過濾,絕大多數檔案到此為止
+      const info = parseClaudeTail(fp);
+      if (info) sessions.push({ ...info, mtime: st.mtimeMs, ageMin: Math.round((now - st.mtimeMs) / 60000) });
+    }
+  }
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  return sessions.slice(0, 8).map(({ label, usedPct, ageMin }) => ({ label, usedPct, ageMin }));
+}
+
+// Codex CLI:~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl,token_count 事件帶累計 usage
+function parseCodexTail(fp) {
+  let lines;
+  try { lines = tailLines(fp); } catch { return null; }
+  let usedPct = null, cwd = null;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    let j;
+    try { j = JSON.parse(lines[i]); } catch { continue; }
+    const p = j.payload || {};
+    if (!cwd && typeof p.cwd === 'string') cwd = p.cwd;
+    if (usedPct == null && p.type === 'token_count' && p.info) {
+      const win = num(p.info.model_context_window) || 272000;
+      const u = p.info.last_token_usage || p.info.total_token_usage || {};
+      const tokens = (u.input_tokens || 0) + (u.output_tokens || 0);
+      if (tokens > 0) usedPct = Math.min(100, Math.round(tokens / win * 1000) / 10);
+    }
+    if (usedPct != null && cwd) break;
+  }
+  if (usedPct == null) return null;
+  const label = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : path.basename(fp).replace(/\.jsonl$/, '').slice(-8);
+  return { label, usedPct };
+}
+
+function scanCodexContext() {
+  const root = path.join(os.homedir(), '.codex', 'sessions');
+  const now = Date.now();
+  const sessions = [];
+  for (const t of [now, now - 86400000]) { // 今天與昨天(跨午夜邊界)
+    const d = new Date(t);
+    const dir = path.join(root, String(d.getFullYear()), pad2(d.getMonth() + 1), pad2(d.getDate()));
+    let files;
+    try { files = fs.readdirSync(dir).filter(f => f.endsWith('.jsonl')); } catch { continue; }
+    for (const f of files) {
+      const fp = path.join(dir, f);
+      let st;
+      try { st = fs.statSync(fp); } catch { continue; }
+      if (now - st.mtimeMs > ACTIVE_MS) continue;
+      const info = parseCodexTail(fp);
+      if (info) sessions.push({ ...info, mtime: st.mtimeMs, ageMin: Math.round((now - st.mtimeMs) / 60000) });
+    }
+  }
+  sessions.sort((a, b) => b.mtime - a.mtime);
+  return sessions.slice(0, 8).map(({ label, usedPct, ageMin }) => ({ label, usedPct, ageMin }));
+}
+
+// ---------- 上游快取與退避:降低撞到 Anthropic/Codex 429 限流的機率 ----------
+// 成功結果快取 3 分鐘(原 55 秒)、失敗後至少 2 分鐘退避才重試(原本每次前端輪詢
+// 都會重打,限流期間反而火上加油)、沿用舊成功資料的時間拉長到 30 分鐘(原 10 分鐘)。
+const CACHE_MS = 180000;
+const FAIL_BACKOFF_MS = 120000;
+const STALE_MS = 1800000;
+const upstreamCache = {};
+async function cachedFetch(key, fn) {
+  const now = Date.now();
+  const c = upstreamCache[key];
+  if (c) {
+    if (c.result.ok && now - c.at < CACHE_MS) return c.result; // 成功快取仍新鮮
+    if (c.lastFail && now - c.lastFail < FAIL_BACKOFF_MS) {    // 才失敗過,退避中,先不重試
+      return c.result.ok
+        ? { ...c.result, stale: true, staleErrCode: 'STALE_BACKOFF' }
+        : c.result;
+    }
+  }
+  let r;
+  try { r = await fn(); } catch (e) { r = { ok: false, errCode: 'UNEXPECTED_EXCEPTION', errParams: { msg: String(e && e.message || e) } }; }
+  if (r.ok) {
+    upstreamCache[key] = { at: now, result: r };
+    return r;
+  }
+  if (c && c.result.ok && now - c.at < STALE_MS) {
+    upstreamCache[key] = { at: c.at, lastFail: now, result: c.result };
+    return { ...c.result, stale: true, staleErrCode: r.errCode, staleErrParams: r.errParams };
+  }
+  upstreamCache[key] = { at: c ? c.at : now, lastFail: now, result: r };
+  return r;
+}
+
+// ---------- HTTP 伺服器 ----------
+function reqLang(req) {
+  const q = (req.url.split('?')[1] || '');
+  return new URLSearchParams(q).get('lang') === 'en' ? 'en' : 'zh-Hant';
+}
+const server = http.createServer(async (req, res) => {
+  const url = (req.url || '/').split('?')[0];
+
+  if (url === '/api/usage') {
+    const lang = reqLang(req);
+    const [claudeRaw, codexRaw, minimaxRaw, kiroRaw] = await Promise.all([
+      cachedFetch('claude', fetchClaude),
+      cachedFetch('codex', fetchCodex),
+      cachedFetch('minimax', fetchMinimax),
+      cachedFetch('kiro', fetchKiro),
+    ]);
+    // 翻譯結果一律用複本(localizeResult 已 shallow-copy),避免把某次請求的語言寫回共用快取物件
+    const claude = localizeResult(claudeRaw, lang);
+    const codex = localizeResult(codexRaw, lang);
+    const minimax = localizeResult(minimaxRaw, lang);
+    const kiro = localizeResult(kiroRaw, lang);
+    // Context 掃描是本機檔案操作,便宜,每次請求即時計算(不論配額查詢成敗)
+    try { claude.context = scanClaudeContext(); } catch { claude.context = []; }
+    try { codex.context = scanCodexContext(); } catch { codex.context = []; }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ time: new Date().toISOString(), providers: { claude, codex, minimax, kiro } }));
+    return;
+  }
+
+  if (url === '/api/minimax/key' && req.method === 'POST') {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    try {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const key = String(body.apiKey || '').trim();
+      const cfgPath = path.join(ROOT, 'config.json');
+      const cfg = readJsonSafe(cfgPath) || {};
+      cfg.minimax = cfg.minimax || {};
+      delete cfg.minimax.apiKey; // 永不保留明文欄位
+      if (!key) {
+        delete cfg.minimax.apiKeyEnc;
+        fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+        res.writeHead(200); res.end(JSON.stringify({ ok: true, cleared: true }));
+        return;
+      }
+      cfg.minimax.apiKeyEnc = encryptSecret(key);
+      fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\n');
+      const testRaw = await fetchMinimax(); // 立即驗證,結果回報前端
+      upstreamCache.minimax = { at: Date.now(), result: testRaw }; // 同步快取(存語言無關的原始結果),清除舊 key 的殘留結果
+      const test = localizeResult(testRaw, body.lang === 'en' ? 'en' : 'zh-Hant');
+      res.writeHead(200); res.end(JSON.stringify({ ok: true, test }));
+    } catch (e) {
+      res.writeHead(400); res.end(JSON.stringify({ ok: false, error: String(e && e.message || e) }));
+    }
+    return;
+  }
+
+  if (url === '/' || url === '/index.html') {
+    try {
+      const html = fs.readFileSync(path.join(ROOT, 'index.html'));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(html);
+    } catch {
+      res.writeHead(500); res.end('index.html not found');
+    }
+    return;
+  }
+
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+  res.end('Not Found');
+});
+
+if (require.main === module) {
+  server.listen(PORT, '127.0.0.1', () => {
+    console.log('AI 使用量儀表板已啟動: http://127.0.0.1:' + PORT);
+    console.log('按 Ctrl+C 結束');
+  });
+}
+
+module.exports = { encryptSecret, decryptSecret, getMinimaxKey };

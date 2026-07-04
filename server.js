@@ -5,6 +5,7 @@
 // 安全:只綁定 127.0.0.1;token 只在本機使用,絕不傳給前端。
 
 const http = require('http');
+const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -36,6 +37,8 @@ const SERR = {
     MINIMAX_UNKNOWN_FORMAT: '已連上但回應格式未知(原始回應已印在伺服器視窗)',
     KIRO_NOT_LOGGED_IN: '尚未使用 Kiro CLI 登入,無法取得',
     KIRO_DETECTED_NOT_IMPLEMENTED: '偵測到 Kiro 憑證,但自動同步尚未實作(請回報以便接線)',
+    ANTIGRAVITY_NOT_RUNNING: '未偵測到執行中的 Antigravity CLI(agy);請在終端機執行 agy 並保持該視窗開啟',
+    ANTIGRAVITY_PROBE_FAILED: '偵測到 agy CLI 執行中,但查詢用量失敗或回應格式不符預期',
     STALE_BACKOFF: '退避中(避免觸發限流),沿用舊資料',
     UNEXPECTED_EXCEPTION: '發生非預期錯誤: {msg}',
   },
@@ -58,6 +61,8 @@ const SERR = {
     MINIMAX_UNKNOWN_FORMAT: 'Connected, but the response format is unknown (raw response printed to the server console)',
     KIRO_NOT_LOGGED_IN: 'Kiro CLI is not logged in yet — usage cannot be fetched',
     KIRO_DETECTED_NOT_IMPLEMENTED: 'Kiro credentials detected, but auto sync is not implemented yet (please report so we can wire it up)',
+    ANTIGRAVITY_NOT_RUNNING: 'No running Antigravity CLI (agy) detected — run `agy` in a terminal and keep it open',
+    ANTIGRAVITY_PROBE_FAILED: 'agy CLI is running, but fetching usage failed or the response did not match expectations',
     STALE_BACKOFF: 'Backing off to avoid rate limits — using cached data',
     UNEXPECTED_EXCEPTION: 'Unexpected error: {msg}',
   },
@@ -416,6 +421,117 @@ async function fetchKiro() {
   return { ok: false, errCode: 'KIRO_DETECTED_NOT_IMPLEMENTED' };
 }
 
+// ---------- Antigravity(Google agentic CLI「agy」;無公開 usage API,借用 CLI 自己的本機 loopback 服務) ----------
+// 2026-07-04 探測過程(細節見 開發計畫.md):agy.exe 執行檔本身是加殼過的封閉二進位、雲端 usage 端點
+// (daily-cloudcode-pa.googleapis.com)的認證憑證存在 Windows 認證管理員裡且是不透明編碼,
+// 兩條路都撞牆。後來在開源專案 steipete/CodexBar(docs/antigravity.md)裡找到:agy CLI 執行期間會在
+// 127.0.0.1 開一個「自己就有 quota 資料」的 Connect-RPC 本機服務,不需要 CSRF token(這點跟
+// Antigravity 桌面 App/IDE 版本不同),已實機驗證此法可行且與 CLI 內 `/model` 畫面數字一致:
+//   POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
+//   headers: Content-Type: application/json, Connect-Protocol-Version: 1  body: {}
+//   回應:{ response: { groups: [ { displayName, buckets: [{ bucketId, window, remainingFraction, resetTime }] } ] } }
+// 限制:此服務只在 agy CLI 行程存活時才會開著(關閉終端機視窗就沒了),故偵測不到時只能提示
+// 使用者「請先在終端機執行 agy 保持連線」,不會主動幫使用者背著啟動一個 agy 行程(避免意外side effect
+// /行程生命週期管理複雜化,超出這個零依賴小工具的範圍)。目前只在 Windows 實機驗證過;macOS/Linux
+// 的 ps/lsof 分支沿用 CodexBar 文件裡的位置與指令,未實機測試。
+function findAgyListenPorts() {
+  try {
+    if (os.platform() === 'win32') {
+      const tasklistOut = execSync('tasklist /FI "IMAGENAME eq agy.exe" /FO CSV /NH', { encoding: 'utf8', timeout: 3000 });
+      const pids = [...tasklistOut.matchAll(/"agy\.exe","(\d+)"/g)].map(m => m[1]);
+      if (!pids.length) return [];
+      const netstatOut = execSync('netstat -ano -p TCP', { encoding: 'utf8', timeout: 3000 });
+      const ports = new Set();
+      for (const line of netstatOut.split('\n')) {
+        const m = line.match(/^\s*TCP\s+127\.0\.0\.1:(\d+)\s+\S+\s+LISTENING\s+(\d+)\s*$/i);
+        if (m && pids.includes(m[2])) ports.add(m[1]);
+      }
+      return [...ports];
+    }
+    // macOS/Linux:未實機驗證,沿用 CodexBar 文件記載的做法
+    const psOut = execSync('ps -ax -o pid=,command=', { encoding: 'utf8', timeout: 3000 });
+    const pids = psOut.split('\n')
+      .filter(l => /(^|[\\/])agy(\s|$)/.test(l.trim()))
+      .map(l => l.trim().split(/\s+/)[0]);
+    const ports = new Set();
+    for (const pid of pids) {
+      try {
+        const lsofOut = execSync(`lsof -nP -iTCP -sTCP:LISTEN -a -p ${pid}`, { encoding: 'utf8', timeout: 3000 });
+        for (const m of lsofOut.matchAll(/:(\d+)\s+\(LISTEN\)/g)) ports.add(m[1]);
+      } catch { /* 該 pid 查不到就跳過 */ }
+    }
+    return [...ports];
+  } catch { return []; }
+}
+
+// 呼叫本機 agy 的 Connect-RPC 服務;loopback 自簽憑證,只在 127.0.0.1 才允許略過憑證驗證
+function postAgyLocalRpc(port, rpcPath, timeoutMs = 5000) {
+  return new Promise((resolve, reject) => {
+    const body = '{}';
+    const req = https.request({
+      host: '127.0.0.1', port, path: rpcPath, method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Connect-Protocol-Version': '1',
+        'Content-Length': Buffer.byteLength(body),
+      },
+      rejectUnauthorized: false,
+      timeout: timeoutMs,
+    }, (res) => {
+      let data = '';
+      res.on('data', c => { data += c; });
+      res.on('end', () => {
+        if (res.statusCode !== 200) { reject(new Error('HTTP ' + res.statusCode)); return; }
+        resolve(data);
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy(new Error('timeout')));
+    req.write(body);
+    req.end();
+  });
+}
+
+function normalizeAntigravityQuota(json) {
+  const groups = json && json.response && Array.isArray(json.response.groups) ? json.response.groups : null;
+  if (!groups || !groups.length) return null;
+  const pickBucket = (group) => {
+    const b = group && Array.isArray(group.buckets) ? group.buckets[0] : null;
+    if (!b || num(b.remainingFraction) == null) return null;
+    const windowMinutes = b.window === 'weekly' ? 10080 : (b.window === 'daily' ? 1440 : 300);
+    return { usedPct: Math.round((1 - b.remainingFraction) * 1000) / 10, resetsAt: b.resetTime || null, windowMinutes };
+  };
+  const geminiGroup = groups.find(g => /gemini/i.test(g.displayName || ''));
+  const otherGroup = groups.find(g => g !== geminiGroup) || null;
+  let longterm = pickBucket(geminiGroup);
+  const otherBucket = pickBucket(otherGroup);
+  const extra = [];
+  if (longterm && otherBucket) {
+    extra.push({ label: (otherGroup.displayName || 'Claude/GPT') + ' 每週', ...otherBucket });
+  } else if (!longterm && otherBucket) {
+    longterm = otherBucket;
+  }
+  if (!longterm) return null;
+  return { session: null, longterm, longtermLabel: '每週', extra };
+}
+
+async function fetchAntigravity() {
+  const ports = findAgyListenPorts();
+  if (!ports.length) return { ok: false, errCode: 'ANTIGRAVITY_NOT_RUNNING' };
+  let lastErrCode = 'ANTIGRAVITY_PROBE_FAILED';
+  for (const port of ports) {
+    let raw;
+    try {
+      raw = await postAgyLocalRpc(port, '/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary');
+    } catch { continue; }
+    let json;
+    try { json = JSON.parse(raw); } catch { continue; }
+    const norm = normalizeAntigravityQuota(json);
+    if (norm) return { ok: true, ...norm };
+  }
+  return { ok: false, errCode: lastErrCode };
+}
+
 // ---------- Context 使用率:掃描本機 CLI session 記錄(只讀檔尾,成本極低) ----------
 const ACTIVE_MS = 30 * 60000; // 30 分鐘內有寫入才算活躍 session
 const pad2 = n => String(n).padStart(2, '0');
@@ -562,22 +678,24 @@ const server = http.createServer(async (req, res) => {
 
   if (url === '/api/usage') {
     const lang = reqLang(req);
-    const [claudeRaw, codexRaw, minimaxRaw, kiroRaw] = await Promise.all([
+    const [claudeRaw, codexRaw, minimaxRaw, kiroRaw, antigravityRaw] = await Promise.all([
       cachedFetch('claude', fetchClaude),
       cachedFetch('codex', fetchCodex),
       cachedFetch('minimax', fetchMinimax),
       cachedFetch('kiro', fetchKiro),
+      cachedFetch('antigravity', fetchAntigravity),
     ]);
     // 翻譯結果一律用複本(localizeResult 已 shallow-copy),避免把某次請求的語言寫回共用快取物件
     const claude = localizeResult(claudeRaw, lang);
     const codex = localizeResult(codexRaw, lang);
     const minimax = localizeResult(minimaxRaw, lang);
     const kiro = localizeResult(kiroRaw, lang);
+    const antigravity = localizeResult(antigravityRaw, lang);
     // Context 掃描是本機檔案操作,便宜,每次請求即時計算(不論配額查詢成敗)
     try { claude.context = scanClaudeContext(); } catch { claude.context = []; }
     try { codex.context = scanCodexContext(); } catch { codex.context = []; }
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({ time: new Date().toISOString(), providers: { claude, codex, minimax, kiro } }));
+    res.end(JSON.stringify({ time: new Date().toISOString(), providers: { claude, codex, minimax, kiro, antigravity } }));
     return;
   }
 

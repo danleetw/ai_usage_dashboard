@@ -472,6 +472,7 @@ const BUILTINS = [
   ['codex', 'Codex', true],
   ['minimax', 'MiniMax', true],
   ['kiro', 'Kiro', true],
+  ['antigravity', 'Antigravity', true],
 ];
 let autoData = {};          // /api/usage 回傳的自動資料(不落地)
 let online = false;
@@ -535,12 +536,19 @@ function effective(p) {
   const sess = { ...p.manual.session, src: 'manual' };
   const lt   = { ...p.manual.longterm, src: 'manual' };
 
-  if (auto && auto.session) {
+  if (auto && auto.session === null) {
+    // 上游明確回報「此提供商沒有 session 級資料」(如 Antigravity 只有週配額,無 5 小時層級)。
+    // 2026-07-04 使用者確認:這種情況不要用手動預設值冒充,改顯示無法讀取(跟 Context 一致),
+    // 即使代價是手動值從此被永久蓋過、無法在這個欄位自行手動追蹤。
+    sess.usedPct = null; sess.resetsAt = null; sess.src = 'auto';
+  } else if (auto && auto.session) {
     if (auto.session.usedPct != null) { sess.usedPct = auto.session.usedPct; sess.src = 'auto'; }
     if (auto.session.resetsAt) { const t = Date.parse(auto.session.resetsAt); if (!isNaN(t)) sess.resetsAt = t; }
     if (auto.session.windowMinutes) sess.windowMin = auto.session.windowMinutes;
   }
-  if (auto && auto.longterm) {
+  if (auto && auto.longterm === null) {
+    lt.usedPct = null; lt.resetsAt = null; lt.src = 'auto';
+  } else if (auto && auto.longterm) {
     if (auto.longterm.usedPct != null) { lt.usedPct = auto.longterm.usedPct; lt.src = 'auto'; }
     if (auto.longterm.resetsAt) { const t = Date.parse(auto.longterm.resetsAt); if (!isNaN(t)) lt.resetsAt = t; }
     if (auto.longterm.windowMinutes) lt.windowMin = auto.longterm.windowMinutes;
@@ -584,6 +592,16 @@ function srcLabel(src) {
 }
 function hpCell(label, usedPct, src) {
   const has = usedPct != null && isFinite(usedPct);
+  // 自動同步但上游明確表示無此資料(effective() 已將 usedPct 設為 null、src 設為 'auto')時,
+  // 顯示跟 Context 一致的灰色虛框「無法讀取」,不邀請使用者編輯(手動值在這個狀態下永遠會被蓋過)
+  if (!has && src === 'auto') {
+    return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>
+      <div class="bar na"><span class="bar-text na-text">${t('naText')}</span></div>
+      <div class="sub">${t('naSub')}</div>
+    </div>`;
+  }
   const used = has ? Math.min(100, Math.max(0, usedPct)) : 0;
   const remain = 100 - used;
   return `
@@ -633,6 +651,15 @@ function ctxCell(ctx) {
 
 function cdCell(label, resetsAt, windowMin, src, pid, kind) {
   const has = resetsAt != null && isFinite(resetsAt);
+  // 同 hpCell:自動同步但上游明確表示無此資料時,顯示灰色虛框,不掛 data-cd(不需要倒數)
+  if (!has && src === 'auto') {
+    return `
+    <div class="metric">
+      <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>
+      <div class="bar na"><span class="bar-text na-text">${t('naText')}</span></div>
+      <div class="sub">${t('naSub')}</div>
+    </div>`;
+  }
   return `
     <div class="metric">
       <div class="metric-label"><span>${label}</span><span class="src">${srcLabel(src)}</span></div>

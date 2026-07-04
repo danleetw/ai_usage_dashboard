@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { execSync } = require('child_process');
+const { execSync, execFile } = require('child_process');
 
 const PORT = 3789;
 const ROOT = __dirname;
@@ -35,8 +35,9 @@ const SERR = {
     MINIMAX_NO_KEY: '尚未設定 API Key:點此列「✎ 編輯」直接輸入(會加密儲存)',
     MINIMAX_STATUS_ERR: 'MiniMax: {msg}',
     MINIMAX_UNKNOWN_FORMAT: '已連上但回應格式未知(原始回應已印在伺服器視窗)',
-    KIRO_NOT_LOGGED_IN: '尚未使用 Kiro CLI 登入,無法取得',
-    KIRO_DETECTED_NOT_IMPLEMENTED: '偵測到 Kiro 憑證,但自動同步尚未實作(請回報以便接線)',
+    KIRO_NOT_LOGGED_IN: '找不到 kiro-cli 執行檔,請確認已安裝並登入',
+    KIRO_CLI_FAILED: '呼叫 kiro-cli 失敗: {msg}',
+    KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage 回應格式不符預期',
     ANTIGRAVITY_NOT_RUNNING: '未偵測到執行中的 Antigravity CLI(agy);請在終端機執行 agy 並保持該視窗開啟',
     ANTIGRAVITY_PROBE_FAILED: '偵測到 agy CLI 執行中,但查詢用量失敗或回應格式不符預期',
     STALE_BACKOFF: '退避中(避免觸發限流),沿用舊資料',
@@ -59,8 +60,9 @@ const SERR = {
     MINIMAX_NO_KEY: 'API Key not set yet — click "✎ Edit" on this row to enter it (it will be encrypted and stored)',
     MINIMAX_STATUS_ERR: 'MiniMax: {msg}',
     MINIMAX_UNKNOWN_FORMAT: 'Connected, but the response format is unknown (raw response printed to the server console)',
-    KIRO_NOT_LOGGED_IN: 'Kiro CLI is not logged in yet — usage cannot be fetched',
-    KIRO_DETECTED_NOT_IMPLEMENTED: 'Kiro credentials detected, but auto sync is not implemented yet (please report so we can wire it up)',
+    KIRO_NOT_LOGGED_IN: 'kiro-cli executable not found — please make sure it is installed and logged in',
+    KIRO_CLI_FAILED: 'Failed to run kiro-cli: {msg}',
+    KIRO_FORMAT_UNEXPECTED: 'kiro-cli /usage response did not match expectations',
     ANTIGRAVITY_NOT_RUNNING: 'No running Antigravity CLI (agy) detected — run `agy` in a terminal and keep it open',
     ANTIGRAVITY_PROBE_FAILED: 'agy CLI is running, but fetching usage failed or the response did not match expectations',
     STALE_BACKOFF: 'Backing off to avoid rate limits — using cached data',
@@ -405,20 +407,96 @@ function readBody(req, limit = 65536) {
   });
 }
 
-// ---------- Kiro(尚無公開 usage API;先偵測本機是否有 CLI 憑證) ----------
-async function fetchKiro() {
-  const candidates = [
-    path.join(os.homedir(), '.kiro'),
-    path.join(os.homedir(), '.aws', 'sso', 'cache'),
-    process.env.APPDATA ? path.join(process.env.APPDATA, 'kiro') : null,
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'kiro') : null,
-  ].filter(Boolean);
-  const found = candidates.some(p => { try { return fs.existsSync(p); } catch { return false; } });
-  if (!found) {
-    return { ok: false, errCode: 'KIRO_NOT_LOGGED_IN' };
+// ---------- Kiro(無公開 usage API;借用 kiro-cli 的 `/usage` 指令輸出,仿照 CodexBar 開源專案的做法) ----------
+// 2026-07-04:原本想走 `kiro-cli serve`(本機 ACP WebSocket,JSON-RPC over ws://127.0.0.1:8082)這條路,
+// 跟 Antigravity 的做法一樣。handshake(initialize → session/new)本身沒問題,但 session/new 之後的
+// account/getUsage 需要「反向」由我方(client)實作一個 auth callback(_kiro/auth/getAccessToken)
+// 才能繼續 —— 這已經超出「借用本機已登入行程的資料」的範圍,變成要自己實作一段認證代理邏輯。
+// 改查 steipete/CodexBar(docs/kiro.md)後發現更簡單的做法:直接呼叫
+// `kiro-cli chat --no-interactive "/usage"`,這是一個唯讀的 metadata 查詢(已實測連續呼叫兩次數字
+// 完全不變,確認不會消耗真實對話額度),輸出是帶 ANSI 顏色碼的純文字報表,去除 ANSI 碼後用正則解析。
+// 注意:`/usage` 前面的斜線在 Git Bash 手動測試時會被 MSYS 路徑轉換搞爛(誤判成 Unix 路徑),但
+// server.js 用 execFile 直接傳陣列參數給 CreateProcess,不會經過任何 shell,故不受影響。
+const KIRO_TIMEOUT_MS = 20000;
+function findKiroCliPath() {
+  const candidates = os.platform() === 'win32'
+    ? [process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, 'Kiro-Cli', 'kiro-cli.exe') : null]
+    : [
+        path.join(os.homedir(), '.local', 'bin', 'kiro-cli'),
+        '/opt/homebrew/bin/kiro-cli',
+        '/usr/local/bin/kiro-cli',
+      ];
+  return candidates.filter(Boolean).find(p => { try { return fs.existsSync(p); } catch { return false; } }) || null;
+}
+// 注意:kiro-cli 把 TUI 報表印到 stderr,不是 stdout(實測確認,非常規但就是這樣),故兩者都收集
+function execFileAsync(file, args, opts) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, opts, (err, stdout, stderr) => {
+      if (err && !stdout && !stderr) { reject(err); return; }
+      resolve((stdout || '') + '\n' + (stderr || ''));
+    });
+  });
+}
+function stripAnsi(s) { return s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, ''); }
+
+function normalizeKiroUsage(text) {
+  const resetMatch = text.match(/resets on (\d{4}-\d{2}-\d{2})/) || text.match(/resets on (\d{2})\/(\d{2})/);
+  const planMatch = text.match(/\|\s*([A-Z][A-Z0-9 ]*)\s*(?:\r?\n|$)/);
+  const creditsMatch = text.match(/\(([\d.]+)\s+of\s+([\d.]+)\s+covered in plan\)/i);
+  if (!creditsMatch) return null;
+  const used = num(parseFloat(creditsMatch[1]));
+  const total = num(parseFloat(creditsMatch[2]));
+  if (used == null || !total) return null;
+
+  let resetsAt = null;
+  if (resetMatch) {
+    if (resetMatch[1] && resetMatch[1].includes('-')) {
+      resetsAt = new Date(resetMatch[1] + 'T00:00:00').toISOString();
+    } else if (resetMatch[2]) {
+      const now = new Date();
+      let year = now.getFullYear();
+      const mm = parseInt(resetMatch[1], 10), dd = parseInt(resetMatch[2], 10);
+      let d = new Date(year, mm - 1, dd);
+      if (d.getTime() < now.getTime()) d = new Date(year + 1, mm - 1, dd);
+      resetsAt = d.toISOString();
+    }
   }
-  // 偵測到憑證後的實際查詢待 Kiro CLI 安裝後探測實作
-  return { ok: false, errCode: 'KIRO_DETECTED_NOT_IMPLEMENTED' };
+
+  const longterm = {
+    usedPct: Math.round((used / total) * 1000) / 10,
+    resetsAt,
+    windowMinutes: 43200,
+  };
+  const extra = [];
+  const bonusMatch = text.match(/Bonus credits:[^\n]*?([\d.]+)\/([\d.]+)\s+credits used(?:,\s*expires in (\d+)\s*days?)?/i);
+  if (bonusMatch) {
+    const bUsed = num(parseFloat(bonusMatch[1])), bTotal = num(parseFloat(bonusMatch[2]));
+    if (bUsed != null && bTotal) {
+      extra.push({
+        label: 'Bonus 額度',
+        usedPct: Math.round((bUsed / bTotal) * 1000) / 10,
+        resetsAt: bonusMatch[3] ? new Date(Date.now() + parseInt(bonusMatch[3], 10) * 86400000).toISOString() : null,
+        windowMinutes: null,
+      });
+    }
+  }
+  return { session: null, longterm, longtermLabel: '每月', extra, planName: planMatch ? planMatch[1].trim() : null };
+}
+
+async function fetchKiro() {
+  const exe = findKiroCliPath();
+  if (!exe) return { ok: false, errCode: 'KIRO_NOT_LOGGED_IN' };
+  let output;
+  try {
+    output = await execFileAsync(exe, ['chat', '--no-interactive', '/usage'], {
+      timeout: KIRO_TIMEOUT_MS, encoding: 'utf8', windowsHide: true,
+    });
+  } catch (e) {
+    return { ok: false, errCode: 'KIRO_CLI_FAILED', errParams: { msg: e.message } };
+  }
+  const norm = normalizeKiroUsage(stripAnsi(output));
+  if (!norm) return { ok: false, errCode: 'KIRO_FORMAT_UNEXPECTED' };
+  return { ok: true, ...norm };
 }
 
 // ---------- Antigravity(Google agentic CLI「agy」;無公開 usage API,借用 CLI 自己的本機 loopback 服務) ----------

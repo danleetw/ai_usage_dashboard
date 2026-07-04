@@ -4,8 +4,9 @@ English | [繁體中文](README.md)
 
 A locally-run AI usage dashboard: one row per AI provider, showing current usage,
 time to next reset, context usage, and weekly/monthly usage as retro HP bars.
-Supports automatic sync for Claude / Codex / MiniMax / Antigravity
-(Antigravity requires the `agy` CLI to be kept running in a terminal).
+Supports automatic sync for Claude / Codex / MiniMax / Antigravity / Kiro
+(Antigravity requires the `agy` CLI to be kept running in a terminal;
+Kiro requires `kiro-cli` to be installed and logged in).
 
 Zero runtime dependencies — the frontend is a single `index.html`, and the
 `server.js` server uses only Node.js built-in modules, so **no `npm install`

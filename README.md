@@ -3,7 +3,8 @@
 [English](README.en.md) | 繁體中文
 
 本機執行的 AI 用量儀表板:一橫列一個 AI 提供商,以電玩血條顯示目前使用率、下次重生倒數、
-Context 使用率、每週/每月使用率。支援 Claude / Codex / MiniMax 自動同步。
+Context 使用率、每週/每月使用率。支援 Claude / Codex / MiniMax / Antigravity 自動同步
+(Antigravity 需保持 `agy` CLI 在終端機中執行)。
 
 零執行期依賴 —— 前端是單一 `index.html`,伺服器 `server.js` 只用 Node.js 內建模組,
 **不需要 `npm install`** 就能執行。伺服器只綁定 `127.0.0.1`,不會對外開放。介面支援

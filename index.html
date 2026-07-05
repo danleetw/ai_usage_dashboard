@@ -212,9 +212,23 @@
   }
   #toast.show { opacity: 1; transform: none; }
   #toast.err { border-color: #ef4444; }
+
+  /* ---------- 浮動小工具模式(?widget=1,見 floating-widget.ps1) ---------- */
+  /* 只留供應商卡片本身,拿掉標題/狀態/語系/新增按鈕;背景與卡片底色都改半透明,讓桌面透出來 */
+  .widget-mode body { background: transparent; padding: 8px; }
+  .widget-mode header { display: none; }
+  .widget-mode .row { background: linear-gradient(180deg, rgba(22,34,60,.55), rgba(18,27,48,.55)); }
 </style>
 </head>
 <body>
+<script>
+// 浮動小工具模式(見 floating-widget.ps1):網址帶 ?widget=1 時加上 widget-mode class,
+// 背景改透明(讓 WebView2 host 設的 DefaultBackgroundColor 透出桌面)、隱藏標題列/狀態/語系/
+// 新增提供商按鈕、卡片底色改半透明;一般瀏覽器開啟不受影響。
+if (new URLSearchParams(location.search).get('widget') === '1') {
+  document.documentElement.classList.add('widget-mode');
+}
+</script>
 
 <header>
   <h1><span data-i18n="pageTitle">AI 使用量儀表板</span> <span class="pix">▮▮▮▯▯</span></h1>

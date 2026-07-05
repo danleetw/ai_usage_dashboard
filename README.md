@@ -63,3 +63,27 @@ MiniMax API Key 等機密只在本機使用,以 AES-256-GCM 加密後存於 `con
 npm install
 npx playwright install chromium
 ```
+
+## 桌面浮動小工具(僅 Windows,選用)
+
+除了傳統瀏覽器分頁,也可以另外開一個無邊框、逐像素透明、釘選在螢幕右上角的浮動小視窗(只顯示供應商
+卡片,拿掉標題/語系切換等),用 WPF + WebView2 實作。兩種模式共用同一個伺服器,可以同時開著:
+
+| | 傳統瀏覽器版本 | 浮動小工具 |
+|---|---|---|
+| 啟動方式 | 雙擊 `start.bat` | 先確保伺服器有在跑,再雙擊 `floating-widget.bat` |
+| 外觀 | 完整版(標題列、語系切換、新增提供商) | 無邊框、透明背景、只有供應商卡片 |
+| 調整大小 | 一般瀏覽器視窗操作 | 拖曳視窗邊緣或四個角落即可(角落沒有視覺標記,但仍可點擊拖曳) |
+| 關閉方式 | 關瀏覽器分頁 | **Alt+F4**(無邊框設計,沒有關閉按鈕) |
+
+第一次使用浮動小工具前,需要手動下載 3 個官方 WebView2 SDK 的 DLL(約 9MB,來自 nuget.org,不隨版控
+一起發佈):
+
+```powershell
+# 在專案根目錄執行
+Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4022.49/microsoft.web.webview2.1.0.4022.49.nupkg" -OutFile webview2.zip
+Expand-Archive webview2.zip -DestinationPath webview2_tmp
+New-Item -ItemType Directory -Force floating-widget-lib
+Copy-Item webview2_tmp\lib\net462\Microsoft.Web.WebView2.Core.dll, webview2_tmp\lib\net462\Microsoft.Web.WebView2.Wpf.dll, webview2_tmp\runtimes\win-x64\native\WebView2Loader.dll floating-widget-lib\
+Remove-Item webview2.zip, webview2_tmp -Recurse
+```

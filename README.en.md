@@ -73,3 +73,29 @@ Only needed if you want to run the Playwright E2E tests:
 npm install
 npx playwright install chromium
 ```
+
+## Floating desktop widget (Windows only, optional)
+
+Besides the regular browser tab, you can also open a borderless, truly (pixel-level) transparent
+little window pinned to the top-right corner of the screen (provider cards only — no title bar,
+no language toggle), built with WPF + WebView2. Both modes share the same server and can be open
+at the same time:
+
+| | Regular browser tab | Floating widget |
+|---|---|---|
+| Launch | Double-click `start.bat` | Make sure the server is running, then double-click `floating-widget.bat` |
+| Look | Full UI (title bar, language toggle, add-provider button) | Borderless, transparent background, provider cards only |
+| Resize | Normal browser window controls | Drag the window edges or corners (corners have no visual marker but are still draggable) |
+| Close | Close the browser tab | **Alt+F4** (no title bar / close button by design) |
+
+Before first use of the floating widget, you need to manually fetch 3 official WebView2 SDK DLLs
+(about 9MB, from nuget.org — not shipped with the repo):
+
+```powershell
+# run from the project root
+Invoke-WebRequest -Uri "https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.4022.49/microsoft.web.webview2.1.0.4022.49.nupkg" -OutFile webview2.zip
+Expand-Archive webview2.zip -DestinationPath webview2_tmp
+New-Item -ItemType Directory -Force floating-widget-lib
+Copy-Item webview2_tmp\lib\net462\Microsoft.Web.WebView2.Core.dll, webview2_tmp\lib\net462\Microsoft.Web.WebView2.Wpf.dll, webview2_tmp\runtimes\win-x64\native\WebView2Loader.dll floating-widget-lib\
+Remove-Item webview2.zip, webview2_tmp -Recurse
+```

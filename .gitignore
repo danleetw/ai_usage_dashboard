@@ -2,3 +2,4 @@ node_modules/
 config.json
 *.log
 開發計畫.md
+floating-widget-lib/

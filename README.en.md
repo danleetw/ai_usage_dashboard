@@ -100,3 +100,18 @@ New-Item -ItemType Directory -Force floating-widget-lib
 Copy-Item webview2_tmp\lib\net462\Microsoft.Web.WebView2.Core.dll, webview2_tmp\lib\net462\Microsoft.Web.WebView2.Wpf.dll, webview2_tmp\runtimes\win-x64\native\WebView2Loader.dll floating-widget-lib\
 Remove-Item webview2.zip, webview2_tmp -Recurse
 ```
+
+### Mini bar mode
+
+If even the card widget feels too big, add the `-Mini` switch for a ~20px-tall, screen-width/5-wide
+single-line bar showing just one provider at a time (name + bar + percentage + reset countdown).
+Double-click `floating-widget-mini.bat` to launch straight into this mode (shows the first provider
+in your saved order by default), or run it yourself with a specific provider:
+
+```
+floating-widget.bat -Mini -Provider claude
+```
+
+`-Provider` is optional (defaults to the first provider in your saved order). With the mini widget
+focused, press **Up/Down** arrow keys to switch which provider it shows. The mini widget has a fixed
+size — it can't be resized by dragging edges, only moved around.

@@ -89,3 +89,16 @@ New-Item -ItemType Directory -Force floating-widget-lib
 Copy-Item webview2_tmp\lib\net462\Microsoft.Web.WebView2.Core.dll, webview2_tmp\lib\net462\Microsoft.Web.WebView2.Wpf.dll, webview2_tmp\runtimes\win-x64\native\WebView2Loader.dll floating-widget-lib\
 Remove-Item webview2.zip, webview2_tmp -Recurse
 ```
+
+### 迷你橫式模式
+
+嫌卡片版還是太大的話,可以加 `-Mini` 開關,改成一行約 20px 高、寬度約螢幕 1/5 的迷你血條,一次只顯示
+一個供應商(名稱 + 血條 + 百分比 + 重置倒數)。雙擊 `floating-widget-mini.bat` 就會直接用這個模式開啟
+(預設顯示排序裡的第一個供應商),或是自己在終端機下參數指定要看哪一個:
+
+```
+floating-widget.bat -Mini -Provider claude
+```
+
+`-Provider` 可省略(預設用你排序裡的第一個供應商)。開著迷你視窗時按 **↑/↓** 方向鍵可以切換顯示的
+供應商。迷你模式固定大小、不能拖邊緣調整大小,只能整個拖曳搬移位置。

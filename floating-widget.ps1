@@ -23,12 +23,19 @@
 # Optional parameters:
 #   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
 #   -Margin 16               margin from the screen edge, in pixels
+#   -Mini                    single-line ~20px-tall bar instead of a full card; fixed size,
+#                            no corner resize handles (drag anywhere on the thin border to move)
+#   -Provider claude         which provider to show first in -Mini mode (defaults to the first
+#                            one in your saved order); switch between providers with Up/Down
+#                            arrow keys while the mini widget has focus
 # To close the widget: Alt+F4 (there is no title bar / close button by design).
 
 param(
-  [int]$Width = 380,
-  [int]$Height = 480,
+  [int]$Width = 0,
+  [int]$Height = 0,
   [int]$Margin = 16,
+  [switch]$Mini,
+  [string]$Provider = '',
   [string]$BaseUrl = 'http://127.0.0.1:3789'
 )
 
@@ -36,6 +43,10 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $libDir = Join-Path $root 'floating-widget-lib'
 $url = "$BaseUrl/?widget=1"
+if ($Mini) {
+  $url += '&mini=1'
+  if ($Provider) { $url += "&provider=$([Uri]::EscapeDataString($Provider))" }
+}
 
 # powershell.exe has no DPI-awareness manifest, so Windows DPI-virtualizes (bitmap-stretches)
 # any window it creates -- this was found to make WebView2's CSS pixels (devicePixelRatio ~1.47)
@@ -91,17 +102,20 @@ namespace AiDashWidget {
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
     const int WM_NCLBUTTONDOWN = 0x00A1;
-    const int BorderPad = 16;   // total width of the grabbable border strip around the WebView2
-    const int ResizeZone = 8;   // how close to the true window edge counts as "resize" rather than "move"
+    int _borderPad = 16;  // total width of the grabbable border strip around the WebView2
+    int _resizeZone = 8;  // how close to the true window edge counts as "resize" rather than "move"
+    bool _mini;            // mini mode: single-line bar, drag-to-move only, no resize (too small for corner handles)
     Border _border;
 
-    public WidgetWindow(string url, string userDataFolder, double left, double top, double width, double height) {
+    public WidgetWindow(string url, string userDataFolder, double left, double top, double width, double height, bool mini) {
+      _mini = mini;
+      if (_mini) { _borderPad = 3; _resizeZone = 0; } // no room for a resize zone at ~20px tall
       Title = "AI Usage Dashboard Widget";
       WindowStyle = WindowStyle.None;
       AllowsTransparency = true;
       Background = Brushes.Transparent;
       Topmost = true;
-      ResizeMode = ResizeMode.CanResize;
+      ResizeMode = _mini ? ResizeMode.NoResize : ResizeMode.CanResize;
       ShowInTaskbar = true;
       Left = left; Top = top; Width = width; Height = height;
 
@@ -116,33 +130,38 @@ namespace AiDashWidget {
       // whole rectangle -- if it fills the entire host window there is no surface left for the
       // parent to hit-test drag-move / edge-resize against. A thin Border margin around it
       // (technically part of the WPF window's own surface, not the child HWND) gives the user
-      // something to grab. Clicking within ResizeZone px of the true window edge sends a native
+      // something to grab. Clicking within _resizeZone px of the true window edge sends a native
       // WM_NCLBUTTONDOWN with the matching hit-test code so Windows handles it as a real resize
       // drag; clicking further in (but still on the border, not the WebView2) falls back to
-      // DragMove() (move the window). BorderPad must be wider than ResizeZone or every point on
+      // DragMove() (move the window). _borderPad must be wider than _resizeZone or every point on
       // the border would count as an edge and there would be no way to just move the window.
+      // In mini mode there's no room for a resize zone at all (_resizeZone=0), so every border
+      // click is just a move.
       _border = new Border();
-      _border.Padding = new Thickness(BorderPad);
+      _border.Padding = new Thickness(_borderPad);
       _border.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)); // ~invisible but non-zero alpha so it's still hit-testable
       _border.Child = webView;
       _border.MouseLeftButtonDown += Border_MouseLeftButtonDown;
 
-      // The border alone gives no visual clue that it's grabbable. Add small visible handle
-      // squares at the four corners -- sitting right on top of the resize zone -- so the user
-      // can actually see where to click-drag to resize. Diagonal resize cursor on hover too.
       var root = new Grid();
       root.Children.Add(_border);
-      root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Top, 13, Cursors.SizeNWSE, new CornerRadius(6, 0, 0, 0)));
-      root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Top, 14, Cursors.SizeNESW, new CornerRadius(0, 6, 0, 0)));
-      root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, 16, Cursors.SizeNESW, new CornerRadius(0, 0, 0, 6)));
-      root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, 17, Cursors.SizeNWSE, new CornerRadius(0, 0, 6, 0)));
+      if (!_mini) {
+        // The border alone gives no visual clue that it's grabbable. Add small visible handle
+        // squares at the four corners -- sitting right on top of the resize zone -- so the user
+        // can actually see where to click-drag to resize. Diagonal resize cursor on hover too.
+        // (Skipped in mini mode: fixed size by design, and there's no physical room for them.)
+        root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Top, 13, Cursors.SizeNWSE, new CornerRadius(6, 0, 0, 0)));
+        root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Top, 14, Cursors.SizeNESW, new CornerRadius(0, 6, 0, 0)));
+        root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, 16, Cursors.SizeNESW, new CornerRadius(0, 0, 0, 6)));
+        root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, 17, Cursors.SizeNWSE, new CornerRadius(0, 0, 6, 0)));
+      }
       Content = root;
 
       // The default window height is just a placeholder -- real content height varies with
       // font rendering / provider data, which doesn't reliably match what test tools (e.g.
       // Playwright's headless Chromium) measure ahead of time. Once the page has actually
-      // loaded real data in this real WebView2 instance, measure the first provider card and
-      // resize the window to fit it exactly (repeats on each navigation/reload).
+      // loaded real data in this real WebView2 instance, measure the target element (one full
+      // provider card, or the single mini bar line) and resize the window to fit it exactly.
       //
       // powershell.exe has no per-monitor-DPI-aware manifest, so WPF's device-independent units
       // don't map 1:1 onto WebView2's CSS pixels here (window.devicePixelRatio measured ~1.47,
@@ -152,23 +171,26 @@ namespace AiDashWidget {
       // guessed scale factor, self-calibrate: we already know the current WPF Height and can ask
       // WebView2 for the resulting window.innerHeight in CSS px, so the ratio between them gives
       // the true conversion factor on whatever machine/monitor this actually runs on.
+      string measureScript = _mini
+        ? "(function(){var el=document.getElementById('miniLine');return el?Math.ceil(el.getBoundingClientRect().height):-1;})()"
+        : "(function(){var rs=document.querySelectorAll('.row');" +
+          "return rs[1]?Math.ceil(rs[1].getBoundingClientRect().top):(rs[0]?Math.ceil(rs[0].getBoundingClientRect().height):-1);})()";
+      int bottomBufferCss = _mini ? 4 : 24;
       webView.NavigationCompleted += async (s, e) => {
         try {
           await Task.Delay(2500); // let the initial /api/usage poll populate real data
           // ExecuteScriptAsync JSON-encodes whatever the script returns; returning plain numbers
           // (not an object via JSON.stringify) keeps the result a plain numeric string like "475",
           // avoiding a layer of escaped-quote JSON-in-JSON that a naive regex would miss.
-          string targetStr = await webView.CoreWebView2.ExecuteScriptAsync(
-            "(function(){var rs=document.querySelectorAll('.row');" +
-            "return rs[1]?Math.ceil(rs[1].getBoundingClientRect().top):(rs[0]?Math.ceil(rs[0].getBoundingClientRect().height):-1);})()");
+          string targetStr = await webView.CoreWebView2.ExecuteScriptAsync(measureScript);
           string innerHStr = await webView.CoreWebView2.ExecuteScriptAsync("window.innerHeight");
           double targetCss, innerHCss;
           if (double.TryParse(targetStr, out targetCss) && double.TryParse(innerHStr, out innerHCss)
               && targetCss > 0 && innerHCss > 0) {
-            double contentWpfUnits = Height - BorderPad * 2;
+            double contentWpfUnits = Height - _borderPad * 2;
             if (contentWpfUnits > 0) {
               double scale = innerHCss / contentWpfUnits; // CSS px per WPF unit, measured live
-              Height = ((targetCss + 24) / scale) + BorderPad * 2; // +24 CSS px bottom buffer
+              Height = ((targetCss + bottomBufferCss) / scale) + _borderPad * 2;
             }
           }
         } catch { }
@@ -179,8 +201,8 @@ namespace AiDashWidget {
 
     Border MakeCornerHandle(HorizontalAlignment hAlign, VerticalAlignment vAlign, int htCode, Cursor cursor, CornerRadius radius) {
       var handle = new Border();
-      handle.Width = ResizeZone * 2;
-      handle.Height = ResizeZone * 2;
+      handle.Width = _resizeZone * 2;
+      handle.Height = _resizeZone * 2;
       handle.Margin = new Thickness(2);
       handle.HorizontalAlignment = hAlign;
       handle.VerticalAlignment = vAlign;
@@ -200,7 +222,7 @@ namespace AiDashWidget {
     void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
       if (e.OriginalSource != _border) return; // ignore clicks that landed on the WebView2 child itself
       var pos = e.GetPosition(this);
-      int ht = HitTestEdge(pos);
+      int ht = _mini ? 0 : HitTestEdge(pos);
       var hwndSource = PresentationSource.FromVisual(this) as HwndSource;
       if (hwndSource == null) return;
       if (ht != 0) {
@@ -212,10 +234,10 @@ namespace AiDashWidget {
     }
 
     int HitTestEdge(Point p) {
-      bool left = p.X <= ResizeZone;
-      bool right = p.X >= ActualWidth - ResizeZone;
-      bool top = p.Y <= ResizeZone;
-      bool bottom = p.Y >= ActualHeight - ResizeZone;
+      bool left = p.X <= _resizeZone;
+      bool right = p.X >= ActualWidth - _resizeZone;
+      bool top = p.Y <= _resizeZone;
+      bool bottom = p.Y >= ActualHeight - _resizeZone;
       if (top && left) return 13;     // HTTOPLEFT
       if (top && right) return 14;    // HTTOPRIGHT
       if (bottom && left) return 16;  // HTBOTTOMLEFT
@@ -232,10 +254,14 @@ namespace AiDashWidget {
 
 Add-Type -AssemblyName System.Windows.Forms
 $area = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+
+if ($Width -le 0) { $Width = if ($Mini) { [int]($area.Width / 5) } else { 380 } }
+if ($Height -le 0) { $Height = if ($Mini) { 28 } else { 480 } } # self-calibrated to real content after load either way
+
 $x = $area.Right - $Width - $Margin
 $y = $area.Top + $Margin
 $userDataFolder = Join-Path $env:TEMP 'ai-dash-widget-webview2'
 
-$window = New-Object AiDashWidget.WidgetWindow($url, $userDataFolder, [double]$x, [double]$y, [double]$Width, [double]$Height)
+$window = New-Object AiDashWidget.WidgetWindow($url, $userDataFolder, [double]$x, [double]$y, [double]$Width, [double]$Height, [bool]$Mini)
 Write-Host "Widget window created (top-right corner, transparent background). Alt+F4 to close." -ForegroundColor Green
 $window.ShowDialog() | Out-Null

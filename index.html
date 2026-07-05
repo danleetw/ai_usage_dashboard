@@ -229,6 +229,25 @@
   .widget-mode ::-webkit-scrollbar-track { background: transparent; }
   .widget-mode ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 4px; }
   .widget-mode ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+
+  /* ---------- 迷你橫式模式(?widget=1&mini=1&provider=xxx,見 floating-widget.ps1 -Mini) ---------- */
+  /* 一次只顯示一個供應商:名稱 + 血條 + 百分比 + 重置倒數,擠進約 20px 高一行;方向鍵上/下切換供應商 */
+  #miniLine { display: none; }
+  .mini-mode body { padding: 0; }
+  .mini-mode #rows { display: none; }
+  .mini-mode #miniLine {
+    display: flex; align-items: center; gap: 6px;
+    height: 20px; padding: 0 6px; box-sizing: border-box;
+    background: linear-gradient(180deg, rgba(22,34,60,.6), rgba(18,27,48,.6));
+    border-radius: 6px; font-size: 11px; white-space: nowrap; overflow: hidden;
+  }
+  .mini-mode .mini-name {
+    font-weight: 700; flex: none; max-width: 30%;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .mini-mode #miniLine .bar { height: 14px; border-radius: 4px; flex: 1 1 auto; min-width: 40px; }
+  .mini-mode #miniLine .bar-text { font-size: 10px; letter-spacing: 0; }
+  .mini-mode #miniLine .cd { flex: 0 0 auto; width: 30%; min-width: 60px; }
 </style>
 </head>
 <body>
@@ -238,6 +257,9 @@
 // 新增提供商按鈕、卡片底色改半透明;一般瀏覽器開啟不受影響。
 if (new URLSearchParams(location.search).get('widget') === '1') {
   document.documentElement.classList.add('widget-mode');
+  if (new URLSearchParams(location.search).get('mini') === '1') {
+    document.documentElement.classList.add('mini-mode');
+  }
 }
 </script>
 
@@ -250,6 +272,7 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
 </header>
 
 <main id="rows"></main>
+<div id="miniLine"></div>
 
 <div id="toast"></div>
 
@@ -701,7 +724,50 @@ function cdCell(label, resetsAt, windowMin, src, pid, kind) {
 function ltLabelText(rawLabel) {
   return rawLabel === '每月' ? t('ltMonthly') : t('ltWeekly');
 }
+// ---------------- 迷你橫式模式:一次只顯示一個供應商,方向鍵上/下切換 ----------------
+let miniIndex = 0;
+const isMiniMode = document.documentElement.classList.contains('mini-mode');
+if (isMiniMode) {
+  const wantId = new URLSearchParams(location.search).get('provider');
+  document.addEventListener('keydown', (ev) => {
+    if (!state.providers.length) return;
+    if (ev.key === 'ArrowUp') { miniIndex = (miniIndex - 1 + state.providers.length) % state.providers.length; renderMini(); }
+    else if (ev.key === 'ArrowDown') { miniIndex = (miniIndex + 1) % state.providers.length; renderMini(); }
+  });
+  // wantId 要等 state 載入(load() 在下面才呼叫)後才能查,先記著,首次 renderMini() 再解析一次
+  window.__miniWantId = wantId;
+}
+function renderMini() {
+  const box = $('#miniLine');
+  if (!box) return;
+  if (window.__miniWantId != null) {
+    const idx = state.providers.findIndex(p => p.id === window.__miniWantId);
+    if (idx >= 0) miniIndex = idx;
+    window.__miniWantId = null; // 只在第一次渲染時解析一次,之後上下鍵切換的選擇不會被蓋掉
+  }
+  if (!state.providers.length) { box.innerHTML = `<span class="mini-name">${t('emptyNote')}</span>`; return; }
+  if (miniIndex >= state.providers.length) miniIndex = 0;
+  const p = state.providers[miniIndex];
+  const e = effective(p);
+  const has = e.sess.usedPct != null && isFinite(e.sess.usedPct);
+  const used = has ? Math.min(100, Math.max(0, e.sess.usedPct)) : 0;
+  const remain = 100 - used;
+  box.innerHTML = `
+    <span class="mini-name" title="${escapeHtml(p.name)}">${escapeHtml(p.name)}</span>
+    <div class="bar">
+      <div class="fill ${hpClass(used)}" style="width:${has ? remain : 0}%"></div>
+      <span class="bar-text">${has ? t('remainPct', { pct: remain.toFixed(0) }) : '—'}</span>
+    </div>
+    <div class="bar cd" data-cd data-pid="${p.id}" data-kind="session"
+         data-resets="${e.sess.resetsAt || ''}" data-window="${e.sess.windowMin || ''}">
+      <div class="fill" style="width:0%"></div>
+      <span class="bar-text">—</span>
+    </div>`;
+  tick();
+}
+
 function renderAll() {
+  if (isMiniMode) { renderMini(); return; }
   const box = $('#rows');
   if (!state.providers.length) {
     box.innerHTML = `<p class="empty-note">${t('emptyNote')}</p>`;

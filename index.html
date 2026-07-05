@@ -218,6 +218,17 @@
   .widget-mode body { background: transparent; padding: 8px; }
   .widget-mode header { display: none; }
   .widget-mode .row { background: linear-gradient(180deg, rgba(22,34,60,.55), rgba(18,27,48,.55)); }
+  /* 血條本身也改半透明(軌道 + 三種血量填色 + 倒數條的填色) */
+  .widget-mode .bar { background: rgba(8,13,26,.18); }
+  .widget-mode .fill.g { background: linear-gradient(180deg, rgba(74,222,128,.22), rgba(21,128,61,.22)); }
+  .widget-mode .fill.y { background: linear-gradient(180deg, rgba(253,224,71,.22), rgba(161,98,7,.22)); }
+  .widget-mode .fill.r { background: linear-gradient(180deg, rgba(248,113,113,.22), rgba(185,28,28,.22)); }
+  .widget-mode .bar.cd .fill { background: linear-gradient(180deg, rgba(125,211,252,.22), rgba(3,105,161,.22)); }
+  /* 捲軸也改透明:隱藏上下箭頭圖示,軌道透明,滑塊改半透明白 */
+  .widget-mode ::-webkit-scrollbar { width: 8px; }
+  .widget-mode ::-webkit-scrollbar-track { background: transparent; }
+  .widget-mode ::-webkit-scrollbar-thumb { background: rgba(255,255,255,.15); border-radius: 4px; }
+  .widget-mode ::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
 </style>
 </head>
 <body>

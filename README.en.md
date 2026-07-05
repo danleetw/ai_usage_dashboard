@@ -78,13 +78,14 @@ npx playwright install chromium
 
 Besides the regular browser tab, you can also open a borderless, truly (pixel-level) transparent
 little window pinned to the top-right corner of the screen (provider cards only — no title bar,
-no language toggle), built with WPF + WebView2. Both modes share the same server and can be open
-at the same time:
+no language toggle; the HP bars and scrollbar are semi-transparent too), built with WPF + WebView2.
+Both modes share the same server and can be open at the same time:
 
 | | Regular browser tab | Floating widget |
 |---|---|---|
 | Launch | Double-click `start.bat` | Make sure the server is running, then double-click `floating-widget.bat` |
-| Look | Full UI (title bar, language toggle, add-provider button) | Borderless, transparent background, provider cards only |
+| Look | Full UI (title bar, language toggle, add-provider button) | Borderless, transparent background, provider cards only, semi-transparent bars/scrollbar |
+| Default size | Normal browser window | Auto-resizes to fit exactly one provider card once data loads |
 | Resize | Normal browser window controls | Drag the window edges or corners (corners have no visual marker but are still draggable) |
 | Close | Close the browser tab | **Alt+F4** (no title bar / close button by design) |
 

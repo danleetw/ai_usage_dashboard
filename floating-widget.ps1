@@ -21,13 +21,13 @@
 # Usage: double-click floating-widget.bat, or run directly:
 #   powershell -ExecutionPolicy Bypass -File floating-widget.ps1
 # Optional parameters:
-#   -Width 380 -Height 700   window size
+#   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
 #   -Margin 16               margin from the screen edge, in pixels
 # To close the widget: Alt+F4 (there is no title bar / close button by design).
 
 param(
   [int]$Width = 380,
-  [int]$Height = 700,
+  [int]$Height = 480,
   [int]$Margin = 16,
   [string]$BaseUrl = 'http://127.0.0.1:3789'
 )
@@ -36,6 +36,20 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $libDir = Join-Path $root 'floating-widget-lib'
 $url = "$BaseUrl/?widget=1"
+
+# powershell.exe has no DPI-awareness manifest, so Windows DPI-virtualizes (bitmap-stretches)
+# any window it creates -- this was found to make WebView2's CSS pixels (devicePixelRatio ~1.47)
+# not match the WPF window's device-independent units at all, throwing off any attempt to size
+# the window to fit real rendered content. Declaring per-monitor-v2 DPI awareness for this
+# process, before any window is created, fixes it at the source instead of fudging pixel math.
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DpiAwareness {
+  [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+}
+'@
+try { [DpiAwareness]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null } catch { } # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 
 # ---------- 0. Make sure the dashboard server is running ----------
 try {
@@ -69,6 +83,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Interop;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using Microsoft.Web.WebView2.Wpf;
 
 namespace AiDashWidget {
@@ -122,6 +137,42 @@ namespace AiDashWidget {
       root.Children.Add(MakeCornerHandle(HorizontalAlignment.Left, VerticalAlignment.Bottom, 16, Cursors.SizeNESW, new CornerRadius(0, 0, 0, 6)));
       root.Children.Add(MakeCornerHandle(HorizontalAlignment.Right, VerticalAlignment.Bottom, 17, Cursors.SizeNWSE, new CornerRadius(0, 0, 6, 0)));
       Content = root;
+
+      // The default window height is just a placeholder -- real content height varies with
+      // font rendering / provider data, which doesn't reliably match what test tools (e.g.
+      // Playwright's headless Chromium) measure ahead of time. Once the page has actually
+      // loaded real data in this real WebView2 instance, measure the first provider card and
+      // resize the window to fit it exactly (repeats on each navigation/reload).
+      //
+      // powershell.exe has no per-monitor-DPI-aware manifest, so WPF's device-independent units
+      // don't map 1:1 onto WebView2's CSS pixels here (window.devicePixelRatio measured ~1.47,
+      // not 1.0, and attempting to fix this at the process level via
+      // SetProcessDpiAwarenessContext was a no-op -- powershell.exe's built-in manifest already
+      // declares an awareness level that can't be overridden at runtime). Rather than hardcode a
+      // guessed scale factor, self-calibrate: we already know the current WPF Height and can ask
+      // WebView2 for the resulting window.innerHeight in CSS px, so the ratio between them gives
+      // the true conversion factor on whatever machine/monitor this actually runs on.
+      webView.NavigationCompleted += async (s, e) => {
+        try {
+          await Task.Delay(2500); // let the initial /api/usage poll populate real data
+          // ExecuteScriptAsync JSON-encodes whatever the script returns; returning plain numbers
+          // (not an object via JSON.stringify) keeps the result a plain numeric string like "475",
+          // avoiding a layer of escaped-quote JSON-in-JSON that a naive regex would miss.
+          string targetStr = await webView.CoreWebView2.ExecuteScriptAsync(
+            "(function(){var rs=document.querySelectorAll('.row');" +
+            "return rs[1]?Math.ceil(rs[1].getBoundingClientRect().top):(rs[0]?Math.ceil(rs[0].getBoundingClientRect().height):-1);})()");
+          string innerHStr = await webView.CoreWebView2.ExecuteScriptAsync("window.innerHeight");
+          double targetCss, innerHCss;
+          if (double.TryParse(targetStr, out targetCss) && double.TryParse(innerHStr, out innerHCss)
+              && targetCss > 0 && innerHCss > 0) {
+            double contentWpfUnits = Height - BorderPad * 2;
+            if (contentWpfUnits > 0) {
+              double scale = innerHCss / contentWpfUnits; // CSS px per WPF unit, measured live
+              Height = ((targetCss + 24) / scale) + BorderPad * 2; // +24 CSS px bottom buffer
+            }
+          }
+        } catch { }
+      };
 
       Loaded += (s, e) => { webView.Source = new Uri(url); };
     }

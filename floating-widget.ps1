@@ -24,10 +24,12 @@
 #   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
 #   -Margin 16               margin from the screen edge, in pixels
 #   -Mini                    single-line ~20px-tall bar instead of a full card; fixed size,
-#                            no corner resize handles (drag anywhere on the thin border to move)
+#                            no corner resize handles
 #   -Provider claude         which provider to show first in -Mini mode (defaults to the first
 #                            one in your saved order); switch between providers with Up/Down
 #                            arrow keys while the mini widget has focus
+# To move the widget: press and drag anywhere on the content (buttons/inputs excluded) --
+# the page posts a "drag" web message and the host turns it into a native HTCAPTION drag.
 # To close the widget: Alt+F4 (there is no title bar / close button by design).
 
 param(
@@ -102,6 +104,7 @@ namespace AiDashWidget {
     [DllImport("user32.dll")] static extern bool ReleaseCapture();
     [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr hWnd, int Msg, IntPtr wParam, IntPtr lParam);
     const int WM_NCLBUTTONDOWN = 0x00A1;
+    const int HTCAPTION = 2;
     int _borderPad = 16;  // total width of the grabbable border strip around the WebView2
     int _resizeZone = 8;  // how close to the true window edge counts as "resize" rather than "move"
     bool _mini;            // mini mode: single-line bar, drag-to-move only, no resize (too small for corner handles)
@@ -126,6 +129,28 @@ namespace AiDashWidget {
       webView.CreationProperties = creationProps;
       webView.DefaultBackgroundColor = System.Drawing.Color.Transparent;
 
+      // The page (index.html, widget mode) posts a "drag" web message when the user presses
+      // the left button on any non-interactive area. WebView2 swallows all mouse input over
+      // its own rectangle, so the host can't see those presses directly -- letting the page
+      // initiate the drag and translating it here into a native title-bar drag (HTCAPTION)
+      // makes the whole content area grabbable, not just the thin border strip.
+      webView.CoreWebView2InitializationCompleted += (s, e) => {
+        if (!e.IsSuccess || webView.CoreWebView2 == null) return;
+        webView.CoreWebView2.WebMessageReceived += (s2, e2) => {
+          string msg;
+          try { msg = e2.TryGetWebMessageAsString(); } catch { return; }
+          if (msg != "drag") return;
+          var hwndSource = PresentationSource.FromVisual(this) as HwndSource;
+          if (hwndSource == null) return;
+          ReleaseCapture();
+          // SendMessage blocks until the native move loop ends (mouse released); the mousedown
+          // that started this was preventDefault()ed in the page, so hand keyboard focus back
+          // to the WebView2 afterwards or the mini widget's Up/Down provider switching dies.
+          SendMessage(hwndSource.Handle, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero);
+          try { webView.Focus(); } catch { }
+        };
+      };
+
       // WebView2 owns a real native child window, which swallows all mouse input across its
       // whole rectangle -- if it fills the entire host window there is no surface left for the
       // parent to hit-test drag-move / edge-resize against. A thin Border margin around it
@@ -137,6 +162,9 @@ namespace AiDashWidget {
       // the border would count as an edge and there would be no way to just move the window.
       // In mini mode there's no room for a resize zone at all (_resizeZone=0), so every border
       // click is just a move.
+      // Note: moving no longer depends on hitting this thin border -- the page itself posts a
+      // "drag" web message on mousedown over non-interactive content (handled above), so the
+      // border now mainly serves edge/corner *resizing*.
       _border = new Border();
       _border.Padding = new Thickness(_borderPad);
       _border.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0)); // ~invisible but non-zero alpha so it's still hit-testable

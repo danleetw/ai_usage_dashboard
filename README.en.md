@@ -87,6 +87,7 @@ Both modes share the same server and can be open at the same time:
 | Look | Full UI (title bar, language toggle, add-provider button) | Borderless, transparent background, provider cards only, semi-transparent bars/scrollbar |
 | Default size | Normal browser window | Auto-resizes to fit exactly one provider card once data loads |
 | Resize | Normal browser window controls | Drag the window edges or corners (corners have no visual marker but are still draggable) |
+| Move | Normal browser window controls | Press and drag anywhere on the cards or background (a grab cursor and a ⠿ hint appear on hover; buttons, inputs and the sort handle are excluded) |
 | Close | Close the browser tab | **Alt+F4** (no title bar / close button by design) |
 
 Before first use of the floating widget, you need to manually fetch 3 official WebView2 SDK DLLs
@@ -105,8 +106,10 @@ Remove-Item webview2.zip, webview2_tmp -Recurse
 
 If even the card widget feels too big, add the `-Mini` switch for a ~20px-tall, screen-width/5-wide
 single-line bar showing just one provider at a time (name + bar + percentage + reset countdown).
-Double-click `floating-widget-mini.bat` to launch straight into this mode (shows the first provider
-in your saved order by default), or run it yourself with a specific provider:
+Just like the card widget, **make sure the server is running first** (double-click `start.bat`,
+skip if it's already up), then double-click `floating-widget-mini.bat` to launch straight into this
+mode (shows the first provider in your saved order by default), or run it yourself with a specific
+provider:
 
 ```
 floating-widget.bat -Mini -Provider claude
@@ -114,4 +117,4 @@ floating-widget.bat -Mini -Provider claude
 
 `-Provider` is optional (defaults to the first provider in your saved order). With the mini widget
 focused, press **Up/Down** arrow keys to switch which provider it shows. The mini widget has a fixed
-size — it can't be resized by dragging edges, only moved around.
+size — it can't be resized by dragging edges; press and drag anywhere on the bar to move it around.

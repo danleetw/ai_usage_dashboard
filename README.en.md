@@ -83,7 +83,7 @@ Both modes share the same server and can be open at the same time:
 
 | | Regular browser tab | Floating widget |
 |---|---|---|
-| Launch | Double-click `start.bat` | Make sure the server is running, then double-click `floating-widget.bat` |
+| Launch | Double-click `start.bat` | Just double-click `floating-widget.bat` (it starts the server itself if it isn't already running) |
 | Look | Full UI (title bar, language toggle, add-provider button) | Borderless, transparent background, provider cards only, semi-transparent bars/scrollbar |
 | Default size | Normal browser window | Auto-resizes to fit exactly one provider card once data loads |
 | Resize | Normal browser window controls | Drag the window edges or corners (corners have no visual marker but are still draggable) |
@@ -106,10 +106,11 @@ Remove-Item webview2.zip, webview2_tmp -Recurse
 
 If even the card widget feels too big, add the `-Mini` switch for a ~20px-tall, screen-width/5-wide
 single-line bar showing just one provider at a time (name + bar + percentage + reset countdown).
-Just like the card widget, **make sure the server is running first** (double-click `start.bat`,
-skip if it's already up), then double-click `floating-widget-mini.bat` to launch straight into this
-mode (shows the first provider in your saved order by default), or run it yourself with a specific
-provider:
+Just like the card widget, double-click `floating-widget-mini.bat` to launch straight into this
+mode (shows the first provider in your saved order by default) — **no need to start `start.bat`
+first**; if the server isn't reachable, it's started automatically in the background (output goes
+to `server.log`) and the widget window opens once it's ready. You can also run it yourself with a
+specific provider:
 
 ```
 floating-widget.bat -Mini -Provider claude

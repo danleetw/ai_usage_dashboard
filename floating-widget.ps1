@@ -20,6 +20,9 @@
 #
 # Usage: double-click floating-widget.bat, or run directly:
 #   powershell -ExecutionPolicy Bypass -File floating-widget.ps1
+# If the dashboard server (server.js) isn't already running on -BaseUrl, this script starts
+# it itself (hidden window, output appended to server.log) and waits up to ~10s for it to
+# come up -- no need to run start.bat first.
 # Optional parameters:
 #   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
 #   -Margin 16               margin from the screen edge, in pixels
@@ -64,12 +67,39 @@ public static class DpiAwareness {
 '@
 try { [DpiAwareness]::SetProcessDpiAwarenessContext([IntPtr](-4)) | Out-Null } catch { } # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
 
-# ---------- 0. Make sure the dashboard server is running ----------
-try {
-  Invoke-WebRequest -Uri "$BaseUrl/api/usage" -TimeoutSec 3 -UseBasicParsing | Out-Null
-} catch {
-  Write-Host "Could not reach $BaseUrl -- start the server first (start.bat)." -ForegroundColor Yellow
-  exit 1
+# ---------- 0. Make sure the dashboard server is running (auto-start it if not) ----------
+function Test-DashboardServer {
+  try {
+    Invoke-WebRequest -Uri "$BaseUrl/api/usage" -TimeoutSec 3 -UseBasicParsing | Out-Null
+    return $true
+  } catch {
+    return $false
+  }
+}
+
+if (-not (Test-DashboardServer)) {
+  Write-Host "$BaseUrl not reachable -- starting the dashboard server automatically..." -ForegroundColor Yellow
+  if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+    Write-Host "Node.js not found -- install it first: https://nodejs.org/" -ForegroundColor Red
+    exit 1
+  }
+  # Launched via a hidden cmd.exe wrapper (not `node` directly) so stdout+stderr can be
+  # merged and appended to server.log with plain cmd redirection; the node process keeps
+  # running in the background after this script exits, same as start.bat does manually.
+  $serverLog = Join-Path $root 'server.log'
+  $cmdArgs = "/c node server.js >> `"$serverLog`" 2>&1"
+  Start-Process -FilePath 'cmd.exe' -ArgumentList $cmdArgs -WorkingDirectory $root -WindowStyle Hidden | Out-Null
+
+  $ready = $false
+  for ($i = 0; $i -lt 20; $i++) {
+    Start-Sleep -Milliseconds 500
+    if (Test-DashboardServer) { $ready = $true; break }
+  }
+  if (-not $ready) {
+    Write-Host "Server did not come up in time -- run start.bat manually to see the error (or check $serverLog)." -ForegroundColor Red
+    exit 1
+  }
+  Write-Host "Server started automatically." -ForegroundColor Green
 }
 
 $coreDll = Join-Path $libDir 'Microsoft.Web.WebView2.Core.dll'

@@ -105,6 +105,9 @@ if (-not (Test-DashboardServer)) {
 $coreDll = Join-Path $libDir 'Microsoft.Web.WebView2.Core.dll'
 $wpfDll = Join-Path $libDir 'Microsoft.Web.WebView2.Wpf.dll'
 if (-not (Test-Path $coreDll) -or -not (Test-Path $wpfDll)) {
+  & (Join-Path $root 'ensure-webview2.ps1')
+}
+if (-not (Test-Path $coreDll) -or -not (Test-Path $wpfDll)) {
   Write-Host "Missing WebView2 DLLs in $libDir -- see README for how to fetch them." -ForegroundColor Red
   exit 1
 }

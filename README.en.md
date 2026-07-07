@@ -90,8 +90,18 @@ Both modes share the same server and can be open at the same time:
 | Move | Normal browser window controls | Press and drag anywhere on the cards or background (a grab cursor and a ⠿ hint appear on hover; buttons, inputs and the sort handle are excluded) |
 | Close | Close the browser tab | **Alt+F4** (no title bar / close button by design) |
 
-Before first use of the floating widget, you need to manually fetch 3 official WebView2 SDK DLLs
-(about 9MB, from nuget.org — not shipped with the repo):
+The floating widget needs 3 official WebView2 SDK DLLs (about 9MB, from nuget.org — not shipped
+with the repo). You don't need to fetch them by hand: `start.bat` and any of the
+`floating-widget*.bat` launchers detect when they're missing and ask whether to download and
+install them automatically (`ensure-webview2.ps1`). If you said "N" that time, you can re-run the
+same script later:
+
+```powershell
+# run from the project root
+.\ensure-webview2.ps1
+```
+
+or fetch them manually the old way:
 
 ```powershell
 # run from the project root

@@ -79,8 +79,16 @@ npx playwright install chromium
 | 搬移位置 | 一般瀏覽器視窗操作 | 按住卡片或背景的任何空白處直接拖曳(滑鼠移上去會出現抓取游標與頂端 ⠿ 提示;按鈕、輸入框、排序把手除外) |
 | 關閉方式 | 關瀏覽器分頁 | **Alt+F4**(無邊框設計,沒有關閉按鈕) |
 
-第一次使用浮動小工具前,需要手動下載 3 個官方 WebView2 SDK 的 DLL(約 9MB,來自 nuget.org,不隨版控
-一起發佈):
+浮動小工具需要 3 個官方 WebView2 SDK 的 DLL(約 9MB,來自 nuget.org,不隨版控一起發佈)。這一步不用
+手動處理:`start.bat` 或任一個 `floating-widget*.bat` 偵測到缺少時,會跳出來問你要不要現在自動下載安裝
+(`ensure-webview2.ps1`)。如果那次選了「N」跳過,之後可以自己重新執行同一支腳本:
+
+```powershell
+# 在專案根目錄執行
+.\ensure-webview2.ps1
+```
+
+或是照舊手動下載安裝:
 
 ```powershell
 # 在專案根目錄執行

@@ -19,7 +19,10 @@ and English, defaulting to your browser's language.
 
 ## Quick Start
 
-The only prerequisite is [Node.js](https://nodejs.org/) (LTS recommended).
+The only prerequisite is [Node.js](https://nodejs.org/) (LTS recommended) — but you don't need to
+install it by hand either: all three launch scripts below detect a missing Node.js and offer to
+install it for you (winget on Windows, Homebrew on macOS, apt-get on Linux; if none of those are
+available, they just print a link to the official site instead of forcing anything).
 
 Download this project (`git clone` or download the ZIP and extract it), then
 from the project folder run the script for your OS:

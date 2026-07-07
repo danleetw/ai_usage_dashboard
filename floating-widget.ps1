@@ -22,7 +22,8 @@
 #   powershell -ExecutionPolicy Bypass -File floating-widget.ps1
 # If the dashboard server (server.js) isn't already running on -BaseUrl, this script starts
 # it itself (hidden window, output appended to server.log) and waits up to ~10s for it to
-# come up -- no need to run start.bat first.
+# come up -- no need to run start.bat first. If Node.js itself is missing, it offers to
+# install it via winget. Missing WebView2 SDK DLLs are offered the same way (ensure-webview2.ps1).
 # Optional parameters:
 #   -Width 380 -Height 480   window size (default fits one provider card; resize as needed)
 #   -Margin 16               margin from the screen edge, in pixels
@@ -80,7 +81,19 @@ function Test-DashboardServer {
 if (-not (Test-DashboardServer)) {
   Write-Host "$BaseUrl not reachable -- starting the dashboard server automatically..." -ForegroundColor Yellow
   if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
-    Write-Host "Node.js not found -- install it first: https://nodejs.org/" -ForegroundColor Red
+    Write-Host "Node.js not found." -ForegroundColor Yellow
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+      $nodeAnswer = Read-Host "Install Node.js LTS now via winget? (Y/N)"
+      if ($nodeAnswer -match '^[Yy]') {
+        Write-Host "Installing Node.js LTS..." -ForegroundColor Cyan
+        winget install -e --id OpenJS.NodeJS.LTS --accept-package-agreements --accept-source-agreements
+        Write-Host "Node.js installed. Close this window, open a new terminal, and run this again (PATH needs to refresh)." -ForegroundColor Green
+        exit 0
+      }
+    } else {
+      Write-Host "winget not found -- install Node.js manually: https://nodejs.org/" -ForegroundColor Red
+    }
+    Write-Host "Node.js is required -- install it first: https://nodejs.org/" -ForegroundColor Red
     exit 1
   }
   # Launched via a hidden cmd.exe wrapper (not `node` directly) so stdout+stderr can be

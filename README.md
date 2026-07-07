@@ -15,7 +15,9 @@ Context 使用率、每週/每月使用率。支援 Claude / Codex / MiniMax / A
 
 ## 快速開始
 
-唯一前提:安裝 [Node.js](https://nodejs.org/)(建議 LTS 版本)。
+唯一前提是 [Node.js](https://nodejs.org/)(建議 LTS 版本),但也不用先手動裝好——下面三個啟動腳本
+偵測不到 Node.js 時都會問你要不要現在自動安裝(Windows 用 winget、macOS 用 Homebrew、Linux 用
+apt-get;找不到對應套件管理員就只印官網連結,不強裝)。
 
 下載本專案(`git clone` 或直接下載 ZIP 解壓縮),進入資料夾後依作業系統執行:
 

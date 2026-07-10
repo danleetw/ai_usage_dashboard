@@ -9,6 +9,9 @@ on:
       - 'index.html'
       - '.github/workflows/build-mac-widget.yml'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
@@ -55,3 +58,25 @@ jobs:
           name: AI-Usage-Widget-macOS
           path: widget-app-mac/dist/AI-Usage-Widget-macOS.zip
           retention-days: 30
+
+      # Gives the build a stable, permanent download link (Release assets don't expire the way
+      # Actions artifacts do) -- moves the same "mac-widget-latest" tag forward on every build
+      # instead of piling up a new release per commit, since this is a personal/local tool, not
+      # a versioned product.
+      - name: Publish/update GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: mac-widget-latest
+          name: "macOS Widget (auto-built)"
+          body: |
+            自動編譯的 macOS 版透明浮動小工具,對應 commit ${{ github.sha }}。
+
+            下載 `AI-Usage-Widget-macOS.zip`,解壓縮後把兩個 `.app` 放進 `ai_dashboard`
+            專案資料夾內(例如建一個 `mac-widget/` 子資料夾),不要移到 /Applications ——
+            App 是靠往上層找 `server.js` 來定位專案根目錄的。
+
+            第一次啟動請「右鍵 > 開啟」繞過 Gatekeeper(未經 Apple 公證,只是 ad-hoc 簽章)。
+          files: widget-app-mac/dist/AI-Usage-Widget-macOS.zip
+          prerelease: true
+          target_commitish: ${{ github.sha }}

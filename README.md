@@ -66,11 +66,39 @@ npm install
 npx playwright install chromium
 ```
 
-## 桌面浮動小工具(僅 Windows,選用)
+## 桌面浮動小工具(Windows / macOS,選用)
 
 除了傳統瀏覽器分頁,也可以另外開一個無邊框、逐像素透明、釘選在螢幕右上角的浮動小視窗(只顯示供應商
-卡片,拿掉標題/語系切換等,血條與捲軸也是半透明),用 WPF + WebView2 實作。兩種模式共用同一個伺服器,
-可以同時開著:
+卡片,拿掉標題/語系切換等,血條與捲軸也是半透明)。兩種模式共用同一個伺服器,可以同時開著。
+
+### 下載編譯好的執行檔
+
+不想自己編譯的話,可以直接下載已經編譯好、自帶執行環境的版本(每次 push 到 main 都會透過 GitHub
+Actions 自動重新編譯、覆蓋更新):
+
+- **Windows**:[AI-Usage-Widget-Windows.zip](https://github.com/danleetw/ai_usage_dashboard/releases/download/win-widget-latest/AI-Usage-Widget-Windows.zip)
+  ([Release 頁面](https://github.com/danleetw/ai_usage_dashboard/releases/tag/win-widget-latest))——
+  .NET 8 WPF + WebView2 實作,自帶完整執行環境,不需要另外安裝 .NET。解壓縮後把整個資料夾放進本專案
+  資料夾內(例如建一個 `win-widget/` 子資料夾),裡面兩個 exe 需要靠往上層找 `server.js` 定位專案根
+  目錄,且 `AiDashWidget.exe`/`AiDashWidgetMini.exe` 需要跟旁邊的 `WebView2Loader.dll` 等相依檔案留在
+  同一個資料夾,不能只複製單一 exe 出去用。
+  - `AiDashWidget.exe` —— 完整卡片版
+  - `AiDashWidgetMini.exe` —— 迷你橫條版
+- **macOS**:[AI-Usage-Widget-macOS.zip](https://github.com/danleetw/ai_usage_dashboard/releases/download/mac-widget-latest/AI-Usage-Widget-macOS.zip)
+  ([Release 頁面](https://github.com/danleetw/ai_usage_dashboard/releases/tag/mac-widget-latest))——
+  Swift/AppKit + WKWebView 實作。解壓縮後把兩個 `.app` 放進本專案資料夾內(同樣不要移到
+  `/Applications`,原因同上)。第一次啟動請**右鍵 > 開啟**繞過 Gatekeeper(未經 Apple 公證,只是
+  ad-hoc 簽章)。
+  - `AI Usage Widget.app` —— 完整卡片版
+  - `AI Usage Widget Mini.app` —— 迷你橫條版
+
+macOS 版目前只在 GitHub Actions 的 macOS runner 上編譯驗證過,尚未經過真人在實機上測試操作手感,遇到
+問題歡迎回報。原始碼在 [`widget-app/`](widget-app)(Windows)與 [`widget-app-mac/`](widget-app-mac)
+(macOS),兩份自動編譯流程定義在 [`.github/workflows/`](.github/workflows)。
+
+### 從原始碼執行(僅 Windows)
+
+不想下載編譯好的執行檔,也可以直接用 PowerShell 腳本執行,行為完全相同,用 WPF + WebView2 實作:
 
 | | 傳統瀏覽器版本 | 浮動小工具 |
 |---|---|---|

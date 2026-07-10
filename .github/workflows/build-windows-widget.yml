@@ -1,0 +1,66 @@
+name: Build Windows Widget
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'widget-app/**'
+      - 'index.html'
+      - '.github/workflows/build-windows-widget.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Publish AiDashWidget (full card)
+        run: dotnet publish widget-app/AiDashWidget/AiDashWidget.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o widget-app/dist
+
+      - name: Publish AiDashWidgetMini (mini bar)
+        # Same output folder as above -- the mini launcher expects AiDashWidget.exe as a
+        # sibling file, and both share the same native DLLs (WebView2Loader.dll etc.), so they
+        # need to live together rather than in separate publish folders.
+        run: dotnet publish widget-app/AiDashWidgetMini/AiDashWidgetMini.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o widget-app/dist
+
+      - name: Zip
+        run: Compress-Archive -Path "widget-app/dist/*" -DestinationPath "widget-app/AI-Usage-Widget-Windows.zip"
+        shell: pwsh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Usage-Widget-Windows
+          path: widget-app/AI-Usage-Widget-Windows.zip
+          retention-days: 30
+
+      - name: Publish/update GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: win-widget-latest
+          name: "Windows Widget (auto-built)"
+          body: |
+            自動編譯的 Windows 版透明浮動小工具,對應 commit ${{ github.sha }}。
+
+            下載 `AI-Usage-Widget-Windows.zip`,解壓縮後把整個資料夾放進 `ai_dashboard`
+            專案資料夾內(例如建一個 `win-widget/` 子資料夾)—— 裡面的 exe 需要靠往上層找
+            `server.js` 來定位專案根目錄,且需要旁邊的 WebView2Loader.dll 等相依檔案一起
+            保留在同一個資料夾,不能只複製單一 exe 出去用。
+
+            - `AiDashWidget.exe` —— 完整卡片版
+            - `AiDashWidgetMini.exe` —— 迷你橫條版
+
+            自帶完整 .NET 執行環境(self-contained),目標機器不需要另外安裝 .NET。
+          files: widget-app/AI-Usage-Widget-Windows.zip
+          prerelease: true
+          target_commitish: ${{ github.sha }}

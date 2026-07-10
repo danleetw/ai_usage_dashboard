@@ -52,7 +52,11 @@ namespace AiDashWidget {
 
       double x = area.Right - width - margin;
       double y = area.Top + margin;
-      string userDataFolder = Path.Combine(Path.GetTempPath(), "ai-dash-widget-webview2");
+      // Separate profile folders for full-card vs. mini mode -- a shared folder was found to
+      // make running both at once (explicitly supported per the README: "兩種模式...可以同時
+      // 開著") fail silently, since WebView2/Chromium profiles hold an exclusive lock and a
+      // second process can't attach to one already in use by another.
+      string userDataFolder = Path.Combine(Path.GetTempPath(), mini ? "ai-dash-widget-webview2-mini" : "ai-dash-widget-webview2");
 
       var window = new WidgetWindow(url, userDataFolder, x, y, width, height, mini);
       var app = new Application();

@@ -49,7 +49,21 @@ namespace AiDashWidget {
       // initiate the drag and translating it here into a native title-bar drag (HTCAPTION)
       // makes the whole content area grabbable, not just the thin border strip.
       webView.CoreWebView2InitializationCompleted += (s, e) => {
-        if (!e.IsSuccess || webView.CoreWebView2 == null) return;
+        if (!e.IsSuccess || webView.CoreWebView2 == null) {
+          // Silently leaving the window blank here (as earlier versions did) is indistinguishable
+          // from "nothing happened" to the user -- most commonly caused by another instance (or a
+          // crashed/force-killed leftover) holding a lock on the same WebView2 UserDataFolder.
+          // Surfacing the real exception message directly, rather than guessing, so whatever the
+          // actual cause turns out to be next time is visible instead of hidden.
+          MessageBox.Show(
+            "WebView2 初始化失敗,小工具視窗會維持空白。\n\n" +
+            "最常見原因:另一個小工具視窗(或當機後沒清乾淨的殘留行程)佔用了同一份設定檔資料夾。" +
+            "請先關閉所有 AiDashWidget / AiDashWidgetMini 視窗,用工作管理員確認沒有殘留的 " +
+            "msedgewebview2.exe 屬於本程式,再重新開啟。\n\n" +
+            "錯誤訊息: " + (e.InitializationException?.Message ?? "(無)"),
+            "AI Usage Dashboard Widget", MessageBoxButton.OK, MessageBoxImage.Warning);
+          return;
+        }
         webView.CoreWebView2.WebMessageReceived += (s2, e2) => {
           string msg;
           try { msg = e2.TryGetWebMessageAsString(); } catch { return; }

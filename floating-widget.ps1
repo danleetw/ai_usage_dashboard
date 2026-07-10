@@ -46,7 +46,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$root = $PSScriptRoot
+# $PSScriptRoot is only reliably populated when this file is executed as a genuine .ps1 by
+# powershell.exe. It was found to also come back empty here when invoked via `&` from a
+# ps2exe-compiled launcher exe (the launcher hosts its own separate PowerShell runtime), which
+# made every path below it (floating-widget-lib, ensure-webview2.ps1, server.js, server.log)
+# resolve against a null root and throw. Falling back through $MyInvocation and finally the
+# current process's own exe path covers both the normal .ps1/.bat path and the compiled-exe path.
+$root = if ($PSScriptRoot) { $PSScriptRoot }
+  elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path }
+  else { Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) }
 $libDir = Join-Path $root 'floating-widget-lib'
 $url = "$BaseUrl/?widget=1"
 if ($Mini) {
@@ -131,10 +139,21 @@ Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase, Sys
 Add-Type -Path $coreDll
 Add-Type -Path $wpfDll
 
-Add-Type -ReferencedAssemblies @(
-  'PresentationFramework', 'PresentationCore', 'WindowsBase', 'System.Xaml', 'System.Drawing',
+# Resolve full file paths for the already-loaded assemblies instead of passing bare short
+# names to -ReferencedAssemblies below. Short names resolve fine when run as a normal .ps1,
+# but inside a ps2exe-compiled exe the C# compiler can't locate them by name (Add-Type then
+# silently produces a type with no members, surfacing later as "The generated type does not
+# define any public methods or content" when the type is used) -- full paths work in both.
+function Resolve-AsmPath([string]$name) {
+  ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq $name } | Select-Object -First 1).Location
+}
+$refAssemblies = @(
+  (Resolve-AsmPath 'PresentationFramework'), (Resolve-AsmPath 'PresentationCore'),
+  (Resolve-AsmPath 'WindowsBase'), (Resolve-AsmPath 'System.Xaml'), (Resolve-AsmPath 'System.Drawing'),
   $coreDll, $wpfDll
-) -TypeDefinition @'
+)
+
+Add-Type -ReferencedAssemblies $refAssemblies -TypeDefinition @'
 using System;
 using System.Windows;
 using System.Windows.Controls;
@@ -265,6 +284,12 @@ namespace AiDashWidget {
             if (contentWpfUnits > 0) {
               double scale = innerHCss / contentWpfUnits; // CSS px per WPF unit, measured live
               Height = ((targetCss + bottomBufferCss) / scale) + _borderPad * 2;
+              // Some hosting environments (e.g. a ps2exe-compiled exe) fire an internal DPI
+              // re-layout when Height changes here, which was observed to also drag Left/Top/
+              // Width off their intended values (window ends up centered and undersized instead
+              // of pinned top-right). Reasserting the original constructor values is a no-op
+              // when nothing drifted (the normal .ps1/.bat path) and a fix when it did.
+              Left = left; Top = top; Width = width;
             }
           }
         } catch { }

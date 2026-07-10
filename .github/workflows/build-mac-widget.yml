@@ -1,0 +1,57 @@
+name: Build macOS Widget
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'widget-app-mac/**'
+      - 'index.html'
+      - '.github/workflows/build-mac-widget.yml'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build (release)
+        working-directory: widget-app-mac
+        run: swift build -c release
+
+      - name: Package .app bundles
+        working-directory: widget-app-mac
+        run: |
+          set -e
+          BIN_DIR=".build/release"
+          mkdir -p dist
+
+          package() {
+            APP_NAME="$1"   # e.g. "AI Usage Widget"
+            EXE_NAME="$2"   # e.g. "AiDashWidgetMac"
+            PLIST="$3"      # e.g. "Info-Full.plist"
+            APP_DIR="dist/${APP_NAME}.app"
+            mkdir -p "${APP_DIR}/Contents/MacOS"
+            cp "${BIN_DIR}/${EXE_NAME}" "${APP_DIR}/Contents/MacOS/${EXE_NAME}"
+            cp "${PLIST}" "${APP_DIR}/Contents/Info.plist"
+            chmod +x "${APP_DIR}/Contents/MacOS/${EXE_NAME}"
+          }
+
+          package "AI Usage Widget" "AiDashWidgetMac" "Info-Full.plist"
+          package "AI Usage Widget Mini" "AiDashWidgetMiniMac" "Info-Mini.plist"
+
+          # Ad-hoc sign (no Apple Developer account / notarization) so the binary at least has a
+          # valid signature shape -- Gatekeeper will still show one "unidentified developer"
+          # prompt on first launch (right-click > Open bypasses it), which is expected for a
+          # personal/local tool distributed outside the App Store.
+          codesign --force --deep --sign - "dist/AI Usage Widget.app"
+          codesign --force --deep --sign - "dist/AI Usage Widget Mini.app"
+
+          cd dist && zip -r -y "AI-Usage-Widget-macOS.zip" "AI Usage Widget.app" "AI Usage Widget Mini.app"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AI-Usage-Widget-macOS
+          path: widget-app-mac/dist/AI-Usage-Widget-macOS.zip
+          retention-days: 30

@@ -277,18 +277,24 @@ if (new URLSearchParams(location.search).get('widget') === '1') {
   if (new URLSearchParams(location.search).get('mini') === '1') {
     document.documentElement.classList.add('mini-mode');
   }
-  // WebView2 是獨立的原生子視窗,會吞掉自己範圍內所有滑鼠事件,WPF 宿主只剩幾 px 的隱形
-  // 邊框能拖,很難抓。改成由頁面發起:在非互動區按下左鍵時 postMessage('drag') 通知宿主
-  // (floating-widget.ps1 收到後轉送 WM_NCLBUTTONDOWN+HTCAPTION,由 Windows 原生接手拖移)。
-  // 按鈕/輸入框/排序把手/摺疊摘要/對話框、以及捲軸上的按壓不觸發,維持原本互動不受影響。
-  // 一般瀏覽器開 ?widget=1 時沒有 chrome.webview,整段自動跳過。
-  if (window.chrome && window.chrome.webview) {
+  // WebView2/WKWebView 是獨立的原生子視窗,會吞掉自己範圍內所有滑鼠事件,原生宿主只剩幾 px
+  // 的隱形邊框能拖,很難抓。改成由頁面發起:在非互動區按下左鍵時 postMessage('drag') 通知宿主
+  // (Windows: floating-widget.ps1/AiDashWidget 收到後轉送 WM_NCLBUTTONDOWN+HTCAPTION 由原生
+  // 接手拖移;macOS: AiDashWidgetMac 收到後呼叫 NSWindow.performDrag)。按鈕/輸入框/排序把手/
+  // 摺疊摘要/對話框、以及捲軸上的按壓不觸發,維持原本互動不受影響。一般瀏覽器開 ?widget=1
+  // 時沒有 chrome.webview 也沒有對應的 webkit.messageHandlers,整段自動跳過。
+  const dragHandler = window.chrome && window.chrome.webview
+    ? (msg) => window.chrome.webview.postMessage(msg)
+    : (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.dragHandler)
+      ? (msg) => window.webkit.messageHandlers.dragHandler.postMessage(msg)
+      : null;
+  if (dragHandler) {
     window.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !(e.target instanceof Element)) return;
       if (e.target.closest('button, input, select, textarea, summary, dialog, .drag-handle')) return;
       const de = document.documentElement;
       if (e.clientX >= de.clientWidth || e.clientY >= de.clientHeight) return; // 按在捲軸上
-      window.chrome.webview.postMessage('drag');
+      dragHandler('drag');
       e.preventDefault();
     });
   }

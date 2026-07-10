@@ -3,3 +3,14 @@ config.json
 *.log
 開發計畫.md
 floating-widget-lib/
+
+# Windows widget: build output (large self-contained exes) + local desktop shortcuts -- keep
+# only the widget-app/ source (csproj/cs/manifest) under version control.
+widget-app/*/bin/
+widget-app/*/obj/
+widget-app/publish/
+*.lnk
+
+# macOS widget: build output only, not the Swift source.
+widget-app-mac/.build/
+widget-app-mac/dist/

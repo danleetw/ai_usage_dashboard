@@ -78,10 +78,10 @@ Actions 自動重新編譯、覆蓋更新):
 
 - **Windows**:[AI-Usage-Widget-Windows.zip](https://github.com/danleetw/ai_usage_dashboard/releases/download/win-widget-latest/AI-Usage-Widget-Windows.zip)
   ([Release 頁面](https://github.com/danleetw/ai_usage_dashboard/releases/tag/win-widget-latest))——
-  .NET 8 WPF + WebView2 實作,自帶完整執行環境,不需要另外安裝 .NET。解壓縮後把整個資料夾放進本專案
-  資料夾內(例如建一個 `win-widget/` 子資料夾),裡面兩個 exe 需要靠往上層找 `server.js` 定位專案根
-  目錄,且 `AiDashWidget.exe`/`AiDashWidgetMini.exe` 需要跟旁邊的 `WebView2Loader.dll` 等相依檔案留在
-  同一個資料夾,不能只複製單一 exe 出去用。
+  .NET 8 WPF + WebView2 實作,自帶完整執行環境,不需要另外安裝 .NET。已內附 `server.js`/`index.html`,
+  解壓縮到任何資料夾(不用是本專案內)都能直接雙擊執行,會自動偵測並啟動 dashboard 伺服器。整個資料夾
+  要留在一起,`AiDashWidget.exe`/`AiDashWidgetMini.exe` 需要跟旁邊的 `WebView2Loader.dll` 等相依檔案
+  同一層,不能只複製單一 exe 出去用。
   - `AiDashWidget.exe` —— 完整卡片版
   - `AiDashWidgetMini.exe` —— 迷你橫條版
 - **macOS**:[AI-Usage-Widget-macOS.zip](https://github.com/danleetw/ai_usage_dashboard/releases/download/mac-widget-latest/AI-Usage-Widget-macOS.zip)

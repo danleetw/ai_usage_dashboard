@@ -32,6 +32,15 @@ jobs:
         # need to live together rather than in separate publish folders.
         run: dotnet publish widget-app/AiDashWidgetMini/AiDashWidgetMini.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o widget-app/dist
 
+      - name: Bundle dashboard server
+        # server.js has zero runtime npm dependencies (Node built-ins only), so copying just
+        # these two files lets the exe find server.js next to itself (FindProjectRoot checks its
+        # own directory first) and run standalone anywhere -- no need to also clone the full
+        # ai_dashboard repo first. config.json is intentionally left out: it's user-specific and
+        # optional (server.js falls back to defaults when it's missing).
+        run: Copy-Item server.js, index.html widget-app/dist/
+        shell: pwsh
+
       - name: Zip
         run: Compress-Archive -Path "widget-app/dist/*" -DestinationPath "widget-app/AI-Usage-Widget-Windows.zip"
         shell: pwsh
@@ -52,10 +61,10 @@ jobs:
           body: |
             自動編譯的 Windows 版透明浮動小工具,對應 commit ${{ github.sha }}。
 
-            下載 `AI-Usage-Widget-Windows.zip`,解壓縮後把整個資料夾放進 `ai_dashboard`
-            專案資料夾內(例如建一個 `win-widget/` 子資料夾)—— 裡面的 exe 需要靠往上層找
-            `server.js` 來定位專案根目錄,且需要旁邊的 WebView2Loader.dll 等相依檔案一起
-            保留在同一個資料夾,不能只複製單一 exe 出去用。
+            下載 `AI-Usage-Widget-Windows.zip`,解壓縮到任何資料夾(桌面也可以)即可雙擊
+            執行,不需要另外 clone `ai_dashboard` 專案 —— 已內附 `server.js`/`index.html`,
+            會在同一個資料夾自動偵測並啟動 dashboard 伺服器。整個資料夾要維持在一起(exe
+            需要旁邊的 WebView2Loader.dll 等相依檔案),不能只複製單一 exe 出去用。
 
             - `AiDashWidget.exe` —— 完整卡片版
             - `AiDashWidgetMini.exe` —— 迷你橫條版
